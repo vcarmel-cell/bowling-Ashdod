@@ -633,14 +633,24 @@ function loadFirebaseSDK() {
   });
 }
 
-let FIREBASE_CONFIG = null;
+// Baked in so a fresh browser/device lands straight on the PIN screen
+// instead of the Firebase setup screen. Overridden below if a device was
+// ever pointed at a different project via Settings → "עדכן Firebase Config".
+let FIREBASE_CONFIG = {
+  apiKey: "AIzaSyBzP45MyGTnrnrlbj4jOiGWDpjDBNVUSpQ",
+  authDomain: "bowling-leage.firebaseapp.com",
+  projectId: "bowling-leage",
+  storageBucket: "bowling-leage.firebasestorage.app",
+  messagingSenderId: "3652484366",
+  appId: "1:3652484366:web:79bb952c34628313c8ab5f"
+};
 let fdb = null;
 
 function loadStoredFbConfig() {
   try {
     const raw = localStorage.getItem('bowling_fb_config');
     if (raw) FIREBASE_CONFIG = JSON.parse(raw);
-  } catch(e) { FIREBASE_CONFIG = null; }
+  } catch(e) { /* keep the baked-in default */ }
 }
 
 let lastFbError = '';
@@ -1666,10 +1676,6 @@ async function boot() {
   dbLoadLocal();
   populateTeamSelects();
   loadStoredFbConfig();
-  if (!FIREBASE_CONFIG) {
-    document.getElementById('setup-screen').style.display = 'flex';
-    return;
-  }
   showLoginScreen();
   try {
     const sdkLoaded = await loadFirebaseSDK();
