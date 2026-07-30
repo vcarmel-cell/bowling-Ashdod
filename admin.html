@@ -366,6 +366,8 @@ input[type="number"].score-input { text-align: center; padding: 8px 4px; font-we
           <h2 style="margin-bottom:14px; font-size:16px;">&#x2601;&#xFE0F; חיבור לענן</h2>
           <p style="font-size:13px;color:#64748B;margin-bottom:14px;">פרויקט Firebase מחובר: <strong id="settings-project-id">—</strong></p>
           <button class="btn btn-secondary" onclick="reopenSetupScreen()">עדכן Firebase Config</button>
+          <button class="btn btn-secondary" style="margin-top:8px;" onclick="forceSyncLocalToCloud()">&#x1F4E4; העלה נתונים מקומיים לענן</button>
+          <p style="font-size:12px;color:#94A3B8;margin-top:8px;">שימושי אם נכנסת פעם למכשיר הזה כשהחיבור לענן היה שבור — זה דוחף את כל הנתונים ששמורים כאן מקומית ל-Firestore.</p>
         </div>
         <div class="card">
           <h2 style="margin-bottom:14px; font-size:16px;">&#x1F511; סיסמת ניהול</h2>
@@ -1603,6 +1605,34 @@ function renderStandings() {
       <td>${s.high}</td>
     </tr>
   `).join('') || '<tr><td colspan="6" style="text-align:center; color:#94A3B8;">אין נתונים עדיין</td></tr>';
+}
+
+// Pushes everything currently held in the local cache up to Firestore,
+// overwriting whatever's there by id. Recovery tool for devices that added
+// data while the cloud connection/permissions were broken (writes fail
+// silently in the background, so local data can end up stuck offline).
+async function forceSyncLocalToCloud() {
+  if (!fdb) { toast('אין חיבור לענן כרגע'); return; }
+  const counts = { teams: DB.teams.length, players: DB.players.length, schedule: DB.schedule.length, results: DB.results.length };
+  confirmAction(
+    'העלאת נתונים מקומיים לענן',
+    `הפעולה תדחוף ${counts.teams} קבוצות, ${counts.players} שחקנים, ${counts.schedule} משחקים מתוזמנים ו-${counts.results} תוצאות מהמכשיר הזה לענן, ותחליף כל נתון קיים בענן באותו מזהה. להמשיך?`,
+    async () => {
+      try {
+        await Promise.all([
+          ...DB.teams.map(t => fbSet('teams', t.id, t)),
+          ...DB.players.map(p => fbSet('players', p.id, p)),
+          ...DB.schedule.map(s => fbSet('schedule', s.id, s)),
+          ...DB.results.map(r => fbSet('results', r.id, r)),
+          fbSet('settings', 'config', DB.settings)
+        ]);
+        toast(`✅ הועלו לענן: ${counts.teams} קבוצות, ${counts.players} שחקנים, ${counts.schedule} משחקים, ${counts.results} תוצאות`);
+      } catch(e) {
+        toast('❌ שגיאה בהעלאה: ' + e.message);
+      }
+    },
+    'העלה לענן'
+  );
 }
 
 // ─── SETTINGS ────────────────────────────────────────────────
