@@ -750,13 +750,24 @@ async function dbLoadRemote() {
     fdb.collection('results').get(),
     fdb.collection('settings').doc('config').get()
   ]);
-  DB.teams = t.docs.map(d => d.data());
-  DB.players = p.docs.map(d => d.data());
-  DB.schedule = s.docs.map(d => d.data());
-  DB.results = r.docs.map(d => d.data());
-  DB.settings = cfg.exists ? { ...DEFAULT_SETTINGS, ...cfg.data() } : { ...DEFAULT_SETTINGS };
+  // Never let a sync silently erase local data: if the cloud has fewer
+  // records than what's already cached on this device (e.g. writes were
+  // failing in the background, or this is a fresh/misconfigured project),
+  // keep the local copy for that collection instead of overwriting it, and
+  // flag it so the admin can push local data up via "העלה נתונים לענן".
+  let staleRemote = false;
+  function reconcile(key, remoteDocs) {
+    if (remoteDocs.length < DB[key].length) { staleRemote = true; return; }
+    DB[key] = remoteDocs;
+  }
+  reconcile('teams', t.docs.map(d => d.data()));
+  reconcile('players', p.docs.map(d => d.data()));
+  reconcile('schedule', s.docs.map(d => d.data()));
+  reconcile('results', r.docs.map(d => d.data()));
+  if (cfg.exists) DB.settings = { ...DEFAULT_SETTINGS, ...cfg.data() };
   if (DB.settings.pin) localStorage.setItem('bowling_pin', DB.settings.pin);
   dbSave();
+  if (staleRemote) toast('⚠️ יש נתונים מקומיים שלא נמצאו בענן — לחץ "העלה נתונים מקומיים לענן" בהגדרות');
 }
 
 async function backgroundSync() {
