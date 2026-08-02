@@ -1307,16 +1307,26 @@ function roundRobinRounds(teamIds) {
   return rounds;
 }
 
+// Local-calendar-date helpers. toISOString() converts to UTC, which shifts
+// the date backward a day for any timezone ahead of UTC (e.g. Israel) once
+// local time is early enough in the morning — exactly the kind of off-by-one
+// that made "today" schedule generation land on yesterday's date.
+function dateToLocalStr(d) {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+function todayStr() {
+  return dateToLocalStr(new Date());
+}
 function addDays(dateStr, days) {
   const d = new Date(dateStr + 'T00:00:00');
   d.setDate(d.getDate() + days);
-  return d.toISOString().slice(0, 10);
+  return dateToLocalStr(d);
 }
 
 function openAutoScheduleModal() {
   if (DB.teams.length < 2) { toast('צריך לפחות 2 קבוצות כדי ליצור תוכנית'); return; }
   document.getElementById('auto-sch-team-count').textContent = DB.teams.length;
-  document.getElementById('auto-sch-start-date').value = new Date().toISOString().slice(0, 10);
+  document.getElementById('auto-sch-start-date').value = todayStr();
   document.getElementById('auto-sch-interval').value = 7;
   document.getElementById('auto-sch-time').value = '';
   document.getElementById('auto-sch-repeats').value = 1;
