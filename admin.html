@@ -491,12 +491,12 @@ input[type="number"].score-input { text-align: center; padding: 8px 4px; font-we
     </div>
     <div class="form-group">
       <label>ממוצע ידני</label>
-      <input type="number" id="player-manual-avg" placeholder="לא נקבע" min="0" max="300">
+      <input type="number" id="player-manual-avg" placeholder="לא נקבע" min="0" max="300" step="0.01">
       <p style="font-size:12px; color:#94A3B8; margin-top:5px;">בשימוש רק כל עוד לשחקן אין היסטוריית משחקים במערכת — למשל כדי שאם הוא נעדר מהמשחק הראשון שלו, הקבוצה לא תקבל 0 עבורו. לאחר המשחק הראשון שלו הממוצע עובר לחישוב אוטומטי.</p>
     </div>
     <div class="form-group">
       <label>הנדיקפ ידני</label>
-      <input type="number" id="player-manual-handicap" placeholder="אוטומטי לפי ממוצע" min="0">
+      <input type="number" id="player-manual-handicap" placeholder="אוטומטי לפי ממוצע" min="0" step="0.01">
       <p style="font-size:12px; color:#94A3B8; margin-top:5px;">בשימוש רק כל עוד לשחקן אין היסטוריית משחקים במערכת — לאחר המשחק הראשון שלו ההנדיקפ עובר לחישוב אוטומטי לפי הממוצע.</p>
     </div>
     <div class="modal-footer">
@@ -1154,7 +1154,7 @@ function absenceFillScore(playerId) {
   const st = playerStatsFor(playerId);
   if (st.games) return Math.max(0, Math.round(st.avg) - 10);
   const p = DB.players.find(x => x.id === playerId);
-  if (p && p.manualAverage != null) return Math.max(0, p.manualAverage - 10);
+  if (p && p.manualAverage != null) return Math.max(0, Math.round(p.manualAverage) - 10);
   return 0;
 }
 
@@ -1194,7 +1194,7 @@ function renderPlayers() {
         ? `<span class="color-dot" style="background:${teamColor(p.teamId)}"></span>${teamName(p.teamId)}`
         : `<span style="cursor:pointer;" onclick="startQuickTeamAssign('${p.id}')" title="לחץ כדי לשייך לקבוצה"><span class="color-dot" style="background:#94A3B8;"></span>ללא קבוצה</span>`
       }</td>
-      <td>${st.games ? st.avg.toFixed(1) : (p.manualAverage != null ? p.manualAverage + ' <span style="color:#94A3B8; font-size:12px;">(ידני)</span>' : '—')}</td>
+      <td>${st.games ? st.avg.toFixed(2) : (p.manualAverage != null ? p.manualAverage.toFixed(2) + ' <span style="color:#94A3B8; font-size:12px;">(ידני)</span>' : '—')}</td>
       <td>${DB.settings.handicapEnabled ? computeHandicap(p.id) + (!st.games && p.manualHandicap != null ? ' <span style="color:#94A3B8; font-size:12px;">(ידני)</span>' : '') : '—'}</td>
       <td style="white-space:nowrap;">
         <button class="btn btn-secondary btn-sm" onclick="openPlayerModal('${p.id}')">ערוך</button>
@@ -1212,8 +1212,8 @@ function renderPlayers() {
     <td><input type="text" id="new-player-name" placeholder="שם שחקן חדש" onkeydown="if(event.key==='Enter') saveInlinePlayer()"></td>
     <td><select id="new-player-gender"><option value="גבר">גבר</option><option value="אישה">אישה</option><option value="">לא צוין</option></select></td>
     <td><select id="new-player-team"><option value="">ללא קבוצה</option>${teamOpts}</select></td>
-    <td><input type="number" id="new-player-avg" placeholder="ידני (לא חובה)" min="0" max="300" onkeydown="if(event.key==='Enter') saveInlinePlayer()"></td>
-    <td><input type="number" id="new-player-handicap" placeholder="אוטומטי" min="0" onkeydown="if(event.key==='Enter') saveInlinePlayer()"></td>
+    <td><input type="number" id="new-player-avg" placeholder="ידני (לא חובה)" min="0" max="300" step="0.01" onkeydown="if(event.key==='Enter') saveInlinePlayer()"></td>
+    <td><input type="number" id="new-player-handicap" placeholder="אוטומטי" min="0" step="0.01" onkeydown="if(event.key==='Enter') saveInlinePlayer()"></td>
     <td><button class="btn btn-primary btn-sm" onclick="saveInlinePlayer()">&#x1F4BE; שמירה</button></td>
   </tr>`;
 
@@ -1257,9 +1257,9 @@ async function saveInlinePlayer() {
   const gender = document.getElementById('new-player-gender').value;
   const teamId = document.getElementById('new-player-team').value;
   const manualAvgRaw = document.getElementById('new-player-avg').value.trim();
-  const manualAverage = manualAvgRaw === '' ? null : Math.max(0, Math.min(300, parseInt(manualAvgRaw) || 0));
+  const manualAverage = manualAvgRaw === '' ? null : Math.max(0, Math.min(300, parseFloat(manualAvgRaw) || 0));
   const manualHandicapRaw = document.getElementById('new-player-handicap').value.trim();
-  const manualHandicap = manualHandicapRaw === '' ? null : Math.max(0, parseInt(manualHandicapRaw) || 0);
+  const manualHandicap = manualHandicapRaw === '' ? null : Math.max(0, parseFloat(manualHandicapRaw) || 0);
   if (!name) { toast('נא להזין שם שחקן'); nameEl.focus(); return; }
   if (teamId && teamPlayerCount(teamId) >= MAX_PLAYERS_PER_TEAM) {
     toast(`⚠️ ${teamName(teamId)} כבר מלאה (${MAX_PLAYERS_PER_TEAM} שחקנים)`);
@@ -1307,9 +1307,9 @@ async function savePlayer() {
   const teamId = document.getElementById('player-team').value;
   const gender = document.getElementById('player-gender').value;
   const manualAvgRaw = document.getElementById('player-manual-avg').value.trim();
-  const manualAverage = manualAvgRaw === '' ? null : Math.max(0, Math.min(300, parseInt(manualAvgRaw) || 0));
+  const manualAverage = manualAvgRaw === '' ? null : Math.max(0, Math.min(300, parseFloat(manualAvgRaw) || 0));
   const manualHandicapRaw = document.getElementById('player-manual-handicap').value.trim();
-  const manualHandicap = manualHandicapRaw === '' ? null : Math.max(0, parseInt(manualHandicapRaw) || 0);
+  const manualHandicap = manualHandicapRaw === '' ? null : Math.max(0, parseFloat(manualHandicapRaw) || 0);
   if (!name) { toast('נא להזין שם שחקן'); return; }
   if (teamId && teamPlayerCount(teamId, id) >= MAX_PLAYERS_PER_TEAM) {
     toast(`⚠️ ${teamName(teamId)} כבר מלאה (${MAX_PLAYERS_PER_TEAM} שחקנים)`);
@@ -2356,7 +2356,7 @@ function renderStandings() {
       <td>${s.played}</td>
       <td><strong>${s.points}</strong></td>
       <td>${s.pins}</td>
-      <td>${s.played ? (s.pins / s.played).toFixed(1) : '—'}</td>
+      <td>${s.played ? (s.pins / s.played).toFixed(2) : '—'}</td>
     </tr>
   `).join('') || '<tr><td colspan="6" style="text-align:center; color:#94A3B8;">אין נתונים עדיין</td></tr>';
 
@@ -2367,7 +2367,7 @@ function renderStandings() {
       <td>${s.player.name}</td>
       <td>${s.player.teamId ? teamName(s.player.teamId) : '—'}</td>
       <td>${s.games}</td>
-      <td><strong>${s.avg.toFixed(1)}</strong></td>
+      <td><strong>${s.avg.toFixed(2)}</strong></td>
       <td>${s.high}</td>
     </tr>
   `).join('') || '<tr><td colspan="6" style="text-align:center; color:#94A3B8;">אין נתונים עדיין</td></tr>';

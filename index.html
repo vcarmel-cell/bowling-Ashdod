@@ -367,7 +367,7 @@ function renderContent(DB) {
                 <td>${s.player.name}</td>
                 <td>${s.player.teamId ? `<span class="color-dot" style="background:${teamColor(s.player.teamId)}"></span>${teamName(s.player.teamId)}` : '—'}</td>
                 <td>${s.games}</td>
-                <td><strong>${s.avg.toFixed(1)}</strong></td>
+                <td><strong>${s.avg.toFixed(2)}</strong></td>
                 <td>${s.high}</td>
               </tr>`).join('') : `<tr><td colspan="6" style="text-align:center;color:#94A3B8;">אין נתונים עדיין</td></tr>`}
           </tbody>
