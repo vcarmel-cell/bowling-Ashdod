@@ -278,6 +278,7 @@ input[type="number"].score-input { text-align: center; padding: 8px 4px; font-we
           <button class="btn btn-secondary" onclick="openPrintFormModal()">&#x1F5A8;&#xFE0F; טופס לערב משחקים</button>
           <button class="btn btn-secondary" onclick="openAutoScheduleModal()">&#x1F3B2; צור תוכנית אוטומטית</button>
           <button class="btn btn-secondary" onclick="openPostponeModal()">&#x1F4C5; דחיית מחזורים</button>
+          <button class="btn btn-danger" onclick="deleteAllSchedule()">&#x1F5D1;&#xFE0F; מחק תוכנית שלמה</button>
           <button class="btn btn-primary" onclick="openScheduleModal()">+ משחק חדש</button>
         </div>
       </div>
@@ -1423,6 +1424,22 @@ function deleteSchedule(id) {
     renderSchedule();
     toast('🗑️ המשחק נמחק');
   });
+}
+
+// Wipes the whole upcoming plan, same scope as auto-schedule regeneration —
+// games that already have a result stay untouched so history isn't lost.
+function deleteAllSchedule() {
+  const toDelete = DB.schedule.filter(s => s.status !== 'completed');
+  if (!toDelete.length) { toast('אין משחקים מתוזמנים למחיקה'); return; }
+  const msg = `הפעולה תמחק את כל ${toDelete.length} המשחקים המתוזמנים בלוח (שלא הוזנה עבורם תוצאה). משחקים שכבר הושלמו לא יימחקו. הפעולה אינה הפיכה — להמשיך?`;
+  confirmAction('מחיקת תוכנית משחקים שלמה', msg, async () => {
+    const ids = toDelete.map(s => s.id);
+    DB.schedule = DB.schedule.filter(s => s.status === 'completed');
+    dbSave();
+    renderSchedule();
+    toast('🗑️ תוכנית המשחקים נמחקה');
+    await Promise.all(ids.map(id => fbDel('schedule', id)));
+  }, 'מחק תוכנית');
 }
 
 // ─── AUTO SCHEDULE (round robin) ───────────────────────────────
