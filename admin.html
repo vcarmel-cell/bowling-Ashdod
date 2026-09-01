@@ -1195,12 +1195,13 @@ function absenceFillScore(playerId) {
 function computeHandicap(playerId) {
   if (!DB.settings.handicapEnabled) return 0;
   const st = playerStatsFor(playerId);
+  const basis = DB.settings.handicapBasis ?? 200;
+  const pct = (DB.settings.handicapPercent ?? 80) / 100;
   if (!st.games) {
     const p = DB.players.find(x => x.id === playerId);
     if (p && p.manualHandicap != null) return p.manualHandicap;
+    if (p && p.manualAverage != null) return Math.max(0, Math.round((basis - p.manualAverage) * pct));
   }
-  const basis = DB.settings.handicapBasis ?? 200;
-  const pct = (DB.settings.handicapPercent ?? 80) / 100;
   const avg = st.games ? st.avg : basis; // no history & no manual value → assume scratch, handicap 0
   return Math.max(0, Math.round((basis - avg) * pct));
 }
