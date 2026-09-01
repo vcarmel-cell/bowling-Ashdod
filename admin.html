@@ -990,9 +990,10 @@ function renderDashboard() {
 function renderTeams() {
   document.getElementById('teams-tbody').innerHTML = DB.teams.map(t => {
     const count = DB.players.filter(p => p.teamId === t.id).length;
+    const unlimited = teamHasUnlimitedRoster(t.id);
     return `<tr>
       <td><span class="color-dot" style="background:${t.color || '#94A3B8'}"></span>${t.name}</td>
-      <td>${count}/${MAX_PLAYERS_PER_TEAM}${count >= MAX_PLAYERS_PER_TEAM ? ' <span class="badge badge-gray">מלאה</span>' : ''}</td>
+      <td>${count}/${unlimited ? '&#8734;' : MAX_PLAYERS_PER_TEAM}${!unlimited && count >= MAX_PLAYERS_PER_TEAM ? ' <span class="badge badge-gray">מלאה</span>' : ''}</td>
       <td style="white-space:nowrap;">
         <button class="btn btn-secondary btn-sm" onclick="openTeamModal('${t.id}')">ערוך</button>
         <button class="btn btn-danger btn-sm" onclick="deleteTeam('${t.id}')">מחק</button>
@@ -1016,13 +1017,14 @@ function renderTeamsRosterGrid() {
       const avgText = st.games ? st.avg.toFixed(2) : (p.manualAverage != null ? `${p.manualAverage.toFixed(2)} <span style="color:#94A3B8; font-size:11px;">(ידני)</span>` : '—');
       return `<tr><td>${p.name}</td><td style="text-align:center;">${avgText}</td></tr>`;
     }).join('') || `<tr><td colspan="2" style="text-align:center; color:#94A3B8;">אין שחקנים בקבוצה זו</td></tr>`;
+    const unlimited = teamHasUnlimitedRoster(t.id);
     return `<div class="card" style="padding:16px;">
-      <h3 style="font-size:15px; margin-bottom:10px;"><span class="color-dot" style="background:${t.color || '#94A3B8'}"></span>${t.name}</h3>
+      <h3 style="font-size:15px; margin-bottom:10px;"><span class="color-dot" style="background:${t.color || '#94A3B8'}"></span>${t.name}${unlimited ? ` <span style="font-size:11px; color:#F59E0B; font-weight:400;">(ללא הגבלת שחקנים)</span>` : ''}</h3>
       <table style="width:100%;">
         <thead><tr><th>שחקן</th><th style="text-align:center;">ממוצע</th></tr></thead>
         <tbody>${rows}</tbody>
       </table>
-      ${hcpOn ? `<p style="margin-top:12px; font-size:13px; color:#0369A1; font-weight:700;">סה"כ הנדיקפ קבוצתי: ${teamHandicapSum(t.id)}</p>` : ''}
+      ${hcpOn ? `<p style="margin-top:12px; font-size:13px; color:#0369A1; font-weight:700;">סה"כ הנדיקפ קבוצתי (כל הקבוצה): ${teamHandicapSum(t.id)}</p>${unlimited ? `<p style="font-size:11px; color:#94A3B8;">בכל מחזור נספרים לניקוד רק 3 המשתתפים בעלי הממוצע הגבוה</p>` : ''}` : ''}
     </div>`;
   }).join('') || '<p style="color:#94A3B8;">אין קבוצות עדיין</p>';
 }
@@ -1137,6 +1139,18 @@ function deleteTeam(id) {
 // ─── PLAYERS ─────────────────────────────────────────────────
 const MAX_PLAYERS_PER_TEAM = 3;
 
+// "פייסרים" is the one team allowed an unlimited roster — every other team
+// still caps at MAX_PLAYERS_PER_TEAM. Only UNLIMITED_ROSTER_COUNT of its
+// players (the highest-average ones actually playing that round) count
+// toward the team's score; see countedPlayerIds below.
+const UNLIMITED_ROSTER_TEAM_NAME = 'פייסרים';
+const UNLIMITED_ROSTER_COUNT = 3;
+
+function teamHasUnlimitedRoster(teamId) {
+  const t = DB.teams.find(x => x.id === teamId);
+  return !!t && t.name === UNLIMITED_ROSTER_TEAM_NAME;
+}
+
 function teamPlayerCount(teamId, excludePlayerId) {
   return DB.players.filter(p => p.teamId === teamId && p.id !== excludePlayerId).length;
 }
@@ -1160,8 +1174,8 @@ function populatePlayerTeamSelect(excludePlayerId) {
   const el = document.getElementById('player-team');
   const opts = DB.teams.map(t => {
     const count = teamPlayerCount(t.id, excludePlayerId);
-    const full = count >= MAX_PLAYERS_PER_TEAM;
-    return `<option value="${t.id}" ${full ? 'disabled' : ''}>${t.name} (${count}/${MAX_PLAYERS_PER_TEAM}${full ? ' — מלאה' : ''})</option>`;
+    const full = !teamHasUnlimitedRoster(t.id) && count >= MAX_PLAYERS_PER_TEAM;
+    return `<option value="${t.id}" ${full ? 'disabled' : ''}>${t.name} (${count}/${teamHasUnlimitedRoster(t.id) ? '&#8734;' : MAX_PLAYERS_PER_TEAM}${full ? ' — מלאה' : ''})</option>`;
   }).join('');
   el.innerHTML = '<option value="">ללא קבוצה</option>' + opts;
 }
@@ -1173,6 +1187,31 @@ function playerStatsFor(playerId) {
     if (s !== undefined && s !== null) { games++; total += s; if (s > high) high = s; }
   }));
   return { games, avg: games ? total / games : 0, high };
+}
+
+// A player's average for ranking purposes: real average once they have
+// game history, otherwise their manual starting average, else unranked
+// (sorts last so unknown players don't bump out a known one).
+function effectiveAverage(playerId) {
+  const st = playerStatsFor(playerId);
+  if (st.games) return st.avg;
+  const p = DB.players.find(x => x.id === playerId);
+  return (p && p.manualAverage != null) ? p.manualAverage : -Infinity;
+}
+
+// Teams capped at MAX_PLAYERS_PER_TEAM always field their whole roster, so
+// this is a no-op for them (returns everyone). For an unlimited-roster team,
+// only the UNLIMITED_ROSTER_COUNT highest-average players among those
+// actually playing this round (i.e. not marked absent) count toward the
+// team's score — the rest still get their game recorded for personal
+// history, just excluded from the team total.
+function countedPlayerIds(teamId, players, isAbsentFn) {
+  if (!teamHasUnlimitedRoster(teamId)) return new Set(players.map(p => p.id));
+  const playing = players.filter(p => !isAbsentFn(p));
+  const top = playing.slice()
+    .sort((a, b) => effectiveAverage(b.id) - effectiveAverage(a.id))
+    .slice(0, UNLIMITED_ROSTER_COUNT);
+  return new Set(top.map(p => p.id));
 }
 
 // Value used to auto-fill an absent player's games: their real average
@@ -1236,8 +1275,8 @@ function renderPlayers() {
 
   const teamOpts = DB.teams.map(t => {
     const count = teamPlayerCount(t.id);
-    const full = count >= MAX_PLAYERS_PER_TEAM;
-    return `<option value="${t.id}" ${full ? 'disabled' : ''}>${t.name} (${count}/${MAX_PLAYERS_PER_TEAM}${full ? ' — מלאה' : ''})</option>`;
+    const full = !teamHasUnlimitedRoster(t.id) && count >= MAX_PLAYERS_PER_TEAM;
+    return `<option value="${t.id}" ${full ? 'disabled' : ''}>${t.name} (${count}/${teamHasUnlimitedRoster(t.id) ? '&#8734;' : MAX_PLAYERS_PER_TEAM}${full ? ' — מלאה' : ''})</option>`;
   }).join('');
   const newRow = `<tr style="background:#F8FCFF;">
     <td><input type="text" id="new-player-name" placeholder="שם שחקן חדש" onkeydown="if(event.key==='Enter') saveInlinePlayer()"></td>
@@ -1257,9 +1296,9 @@ function renderPlayers() {
 function startQuickTeamAssign(playerId) {
   const cell = document.getElementById(`team-cell-${playerId}`);
   if (!cell) return;
-  const availableTeams = DB.teams.filter(t => teamPlayerCount(t.id) < MAX_PLAYERS_PER_TEAM);
+  const availableTeams = DB.teams.filter(t => teamHasUnlimitedRoster(t.id) || teamPlayerCount(t.id) < MAX_PLAYERS_PER_TEAM);
   if (!availableTeams.length) { toast('אין קבוצות עם מקום פנוי'); return; }
-  const opts = availableTeams.map(t => `<option value="${t.id}">${t.name} (${teamPlayerCount(t.id)}/${MAX_PLAYERS_PER_TEAM})</option>`).join('');
+  const opts = availableTeams.map(t => `<option value="${t.id}">${t.name} (${teamPlayerCount(t.id)}/${teamHasUnlimitedRoster(t.id) ? '&#8734;' : MAX_PLAYERS_PER_TEAM})</option>`).join('');
   cell.innerHTML = `<select onchange="quickAssignTeam('${playerId}', this.value)" style="max-width:160px;">
       <option value="">בחר קבוצה...</option>${opts}
     </select>
@@ -1292,7 +1331,7 @@ async function saveInlinePlayer() {
   const manualHandicapRaw = document.getElementById('new-player-handicap').value.trim();
   const manualHandicap = manualHandicapRaw === '' ? null : Math.max(0, parseFloat(manualHandicapRaw) || 0);
   if (!name) { toast('נא להזין שם שחקן'); nameEl.focus(); return; }
-  if (teamId && teamPlayerCount(teamId) >= MAX_PLAYERS_PER_TEAM) {
+  if (teamId && !teamHasUnlimitedRoster(teamId) && teamPlayerCount(teamId) >= MAX_PLAYERS_PER_TEAM) {
     toast(`⚠️ ${teamName(teamId)} כבר מלאה (${MAX_PLAYERS_PER_TEAM} שחקנים)`);
     return;
   }
@@ -1342,7 +1381,7 @@ async function savePlayer() {
   const manualHandicapRaw = document.getElementById('player-manual-handicap').value.trim();
   const manualHandicap = manualHandicapRaw === '' ? null : Math.max(0, parseFloat(manualHandicapRaw) || 0);
   if (!name) { toast('נא להזין שם שחקן'); return; }
-  if (teamId && teamPlayerCount(teamId, id) >= MAX_PLAYERS_PER_TEAM) {
+  if (teamId && !teamHasUnlimitedRoster(teamId) && teamPlayerCount(teamId, id) >= MAX_PLAYERS_PER_TEAM) {
     toast(`⚠️ ${teamName(teamId)} כבר מלאה (${MAX_PLAYERS_PER_TEAM} שחקנים)`);
     return;
   }
@@ -1777,12 +1816,15 @@ function openResultDetail(id) {
   const teamBPlayers = DB.players.filter(p => p.teamId === r.teamBId);
   const gamesCount = (r.games || []).length;
   const hcp = r.playerHandicaps || {};
-  function rows(players) {
+  function rows(players, side) {
+    const counted = resultCountedIds(r, side, players);
+    const unlimited = teamHasUnlimitedRoster(side === 'a' ? r.teamAId : r.teamBId);
     return players.map(p => {
       const cells = (r.games || []).map(g => `<td style="text-align:center;">${g.playerScores && g.playerScores[p.id] != null ? g.playerScores[p.id] : '—'}</td>`).join('');
       const total = (r.games || []).reduce((s, g) => s + ((g.playerScores && g.playerScores[p.id]) || 0), 0);
       const hLabel = r.handicapEnabled ? ` <span style="color:#94A3B8; font-size:12px;">(הנד׳ ${hcp[p.id] ?? 0})</span>` : '';
-      return `<tr><td>${p.name}${hLabel}</td>${cells}<td style="font-weight:800;">${total}</td></tr>`;
+      const notCountedLabel = (unlimited && !counted.has(p.id)) ? ` <span style="color:#F59E0B; font-size:12px;">(לא נספר בסה"כ הקבוצתי)</span>` : '';
+      return `<tr><td>${p.name}${hLabel}${notCountedLabel}</td>${cells}<td style="font-weight:800;">${total}</td></tr>`;
     }).join('');
   }
   function totalsFooter(side) {
@@ -1799,9 +1841,9 @@ function openResultDetail(id) {
     ${r.teamAForfeit ? `<p style="color:#EF4444; font-size:13px; margin-bottom:6px;">&#x26A0;&#xFE0F; ${teamName(r.teamAId)} לא הגיעה למשחק — 0 נקודות.</p>` : ''}
     ${r.teamBForfeit ? `<p style="color:#EF4444; font-size:13px; margin-bottom:6px;">&#x26A0;&#xFE0F; ${teamName(r.teamBId)} לא הגיעה למשחק — 0 נקודות.</p>` : ''}
     <h3 style="font-size:14px; margin-bottom:8px;">${teamName(r.teamAId)}</h3>
-    <div class="table-wrap"><table><thead><tr><th>שחקן</th>${header}<th>סה"כ</th></tr></thead><tbody>${rows(teamAPlayers) || `<tr><td colspan="${gamesCount + 2}" style="text-align:center;color:#94A3B8;">אין שחקנים</td></tr>`}${totalsFooter('A')}</tbody></table></div>
+    <div class="table-wrap"><table><thead><tr><th>שחקן</th>${header}<th>סה"כ</th></tr></thead><tbody>${rows(teamAPlayers, 'a') || `<tr><td colspan="${gamesCount + 2}" style="text-align:center;color:#94A3B8;">אין שחקנים</td></tr>`}${totalsFooter('A')}</tbody></table></div>
     <h3 style="font-size:14px; margin:16px 0 8px;">${teamName(r.teamBId)}</h3>
-    <div class="table-wrap"><table><thead><tr><th>שחקן</th>${header}<th>סה"כ</th></tr></thead><tbody>${rows(teamBPlayers) || `<tr><td colspan="${gamesCount + 2}" style="text-align:center;color:#94A3B8;">אין שחקנים</td></tr>`}${totalsFooter('B')}</tbody></table></div>
+    <div class="table-wrap"><table><thead><tr><th>שחקן</th>${header}<th>סה"כ</th></tr></thead><tbody>${rows(teamBPlayers, 'b') || `<tr><td colspan="${gamesCount + 2}" style="text-align:center;color:#94A3B8;">אין שחקנים</td></tr>`}${totalsFooter('B')}</tbody></table></div>
   `;
   openModalEl('result-detail-modal');
 }
@@ -1836,6 +1878,15 @@ function openEditResult(resultId) {
   openModalEl('edit-result-modal');
 }
 
+// Falls back to "everyone counts" for results saved before the
+// unlimited-roster feature existed (or for any normally-capped team, where
+// this is always the full roster anyway).
+function resultCountedIds(r, side, players) {
+  const saved = side === 'a' ? r.teamACountedIds : r.teamBCountedIds;
+  if (saved && saved.length) return new Set(saved);
+  return new Set(players.map(p => p.id));
+}
+
 function buildEditResultRoster(r) {
   const gamesCount = (r.games || []).length;
   const hcpOn = !!r.handicapEnabled;
@@ -1843,6 +1894,7 @@ function buildEditResultRoster(r) {
 
   function buildTeamBlock(teamId, side) {
     const players = DB.players.filter(p => p.teamId === teamId);
+    const unlimited = teamHasUnlimitedRoster(teamId);
     const savedOrder = side === 'a' ? r.teamAOrder : r.teamBOrder;
     const ordered = (savedOrder && savedOrder.length)
       ? savedOrder.map(id => players.find(p => p.id === id)).filter(Boolean).concat(players.filter(p => !savedOrder.includes(p.id)))
@@ -1866,7 +1918,7 @@ function buildEditResultRoster(r) {
     const hcpCells = Array.from({ length: gamesCount }, (_, i) => `<td id="edit-hcp-${side}-${i}" style="text-align:center;">0</td>`).join('');
     const colspan = gamesCount + (hcpOn ? 2 : 1) + 1;
     return `<div class="roster-card">
-      <h4 style="font-size:14px; margin-bottom:8px;"><span class="color-dot" style="background:${teamColor(teamId)}"></span>${teamName(teamId)}${lineupOn ? ` <span style="font-size:12px; color:#0369A1; font-weight:400;">(סדר עמדות אישי — ניתן לשנות בחצים)</span>` : ''}</h4>
+      <h4 style="font-size:14px; margin-bottom:8px;"><span class="color-dot" style="background:${teamColor(teamId)}"></span>${teamName(teamId)}${lineupOn ? ` <span style="font-size:12px; color:#0369A1; font-weight:400;">(סדר עמדות אישי — ניתן לשנות בחצים)</span>` : ''}${unlimited ? ` <span style="font-size:12px; color:#F59E0B; font-weight:400;">(רק 3 השחקנים שנקבעו במקור לניקוד הקבוצתי נספרים)</span>` : ''}</h4>
       <div class="table-wrap"><table>
         <thead><tr><th>שחקן</th>${hcpOn ? '<th>הנד&rsquo;</th>' : ''}${header}<th>נעדר</th></tr></thead>
         <tbody id="${tbodyId}">${rows || `<tr><td colspan="${colspan}" style="text-align:center;color:#94A3B8;">אין שחקנים בקבוצה זו</td></tr>`}</tbody>
@@ -1881,8 +1933,8 @@ function buildEditResultRoster(r) {
   return buildTeamBlock(r.teamAId, 'a') + buildTeamBlock(r.teamBId, 'b');
 }
 
-function editResultHcpSum(r, teamId) {
-  return DB.players.filter(p => p.teamId === teamId)
+function editResultHcpSum(r, teamId, countedIds) {
+  return DB.players.filter(p => p.teamId === teamId && countedIds.has(p.id))
     .reduce((s, p) => s + ((r.playerHandicaps && r.playerHandicaps[p.id]) || 0), 0);
 }
 
@@ -1906,13 +1958,15 @@ function recalcEditResultTotals() {
   const gamesCount = (r.games || []).length;
   const aPlayers = DB.players.filter(p => p.teamId === r.teamAId);
   const bPlayers = DB.players.filter(p => p.teamId === r.teamBId);
-  const aHcpSum = editResultHcpSum(r, r.teamAId);
-  const bHcpSum = editResultHcpSum(r, r.teamBId);
+  const aCounted = resultCountedIds(r, 'a', aPlayers);
+  const bCounted = resultCountedIds(r, 'b', bPlayers);
+  const aHcpSum = editResultHcpSum(r, r.teamAId, aCounted);
+  const bHcpSum = editResultHcpSum(r, r.teamBId, bCounted);
   const gamesData = [];
   for (let i = 0; i < gamesCount; i++) {
     let aRaw = 0, bRaw = 0, aBonus = 0, bBonus = 0;
-    aPlayers.forEach(p => { const el = document.getElementById(`edit_a_${p.id}_${i}`); const v = el ? clampScore(el.value) : 0; aRaw += v; aBonus += highScoreBonus(v); });
-    bPlayers.forEach(p => { const el = document.getElementById(`edit_b_${p.id}_${i}`); const v = el ? clampScore(el.value) : 0; bRaw += v; bBonus += highScoreBonus(v); });
+    aPlayers.forEach(p => { if (!aCounted.has(p.id)) return; const el = document.getElementById(`edit_a_${p.id}_${i}`); const v = el ? clampScore(el.value) : 0; aRaw += v; aBonus += highScoreBonus(v); });
+    bPlayers.forEach(p => { if (!bCounted.has(p.id)) return; const el = document.getElementById(`edit_b_${p.id}_${i}`); const v = el ? clampScore(el.value) : 0; bRaw += v; bBonus += highScoreBonus(v); });
     const aHcp = aRaw + aHcpSum, bHcp = bRaw + bHcpSum;
     const rawAEl = document.getElementById(`edit-raw-a-${i}`); if (rawAEl) rawAEl.textContent = aRaw;
     const rawBEl = document.getElementById(`edit-raw-b-${i}`); if (rawBEl) rawBEl.textContent = bRaw;
@@ -1948,15 +2002,17 @@ async function saveEditResult() {
   const gamesCount = (r.games || []).length;
   const aPlayers = DB.players.filter(p => p.teamId === r.teamAId);
   const bPlayers = DB.players.filter(p => p.teamId === r.teamBId);
-  const aHcpSum = editResultHcpSum(r, r.teamAId);
-  const bHcpSum = editResultHcpSum(r, r.teamBId);
+  const aCounted = resultCountedIds(r, 'a', aPlayers);
+  const bCounted = resultCountedIds(r, 'b', bPlayers);
+  const aHcpSum = editResultHcpSum(r, r.teamAId, aCounted);
+  const bHcpSum = editResultHcpSum(r, r.teamBId, bCounted);
 
   const games = [];
   for (let i = 0; i < gamesCount; i++) {
     const playerScores = {};
     let aRaw = 0, bRaw = 0, aBonus = 0, bBonus = 0;
-    aPlayers.forEach(p => { const el = document.getElementById(`edit_a_${p.id}_${i}`); const v = el ? clampScore(el.value) : 0; playerScores[p.id] = v; aRaw += v; aBonus += highScoreBonus(v); });
-    bPlayers.forEach(p => { const el = document.getElementById(`edit_b_${p.id}_${i}`); const v = el ? clampScore(el.value) : 0; playerScores[p.id] = v; bRaw += v; bBonus += highScoreBonus(v); });
+    aPlayers.forEach(p => { const el = document.getElementById(`edit_a_${p.id}_${i}`); const v = el ? clampScore(el.value) : 0; playerScores[p.id] = v; if (aCounted.has(p.id)) { aRaw += v; aBonus += highScoreBonus(v); } });
+    bPlayers.forEach(p => { const el = document.getElementById(`edit_b_${p.id}_${i}`); const v = el ? clampScore(el.value) : 0; playerScores[p.id] = v; if (bCounted.has(p.id)) { bRaw += v; bBonus += highScoreBonus(v); } });
     games.push({
       gameNum: i + 1, playerScores,
       teamARawTotal: aRaw, teamBRawTotal: bRaw,
@@ -2121,8 +2177,9 @@ function buildMatchEntryCard(s) {
     const rawCells = Array.from({ length: gamesCount }, (_, i) => `<td id="mt-raw-${s.id}-${side}-${i}" style="text-align:center;">0</td>`).join('');
     const hcpCells = Array.from({ length: gamesCount }, (_, i) => `<td id="mt-hcp-${s.id}-${side}-${i}" style="text-align:center;">0</td>`).join('');
     const colspan = gamesCount + (hcpOn ? 2 : 1) + 1;
+    const unlimited = teamHasUnlimitedRoster(teamId);
     return `<div class="roster-card">
-      <h4 style="font-size:14px; margin-bottom:8px;"><span class="color-dot" style="background:${teamColor(teamId)}"></span>${teamName(teamId)}${hcpOn ? ` <span style="font-size:12px; color:#94A3B8; font-weight:400;">(סה"כ הנדיקפ קבוצתי: ${teamHandicapSum(teamId)})</span>` : ''}${lineupOn ? ` <span style="font-size:12px; color:#0369A1; font-weight:400;">(סדר עמדות אישי — ניתן לשנות בחצים)</span>` : ''}</h4>
+      <h4 style="font-size:14px; margin-bottom:8px;"><span class="color-dot" style="background:${teamColor(teamId)}"></span>${teamName(teamId)}${hcpOn ? ` <span style="font-size:12px; color:#94A3B8; font-weight:400;">(סה"כ הנדיקפ קבוצתי: <span id="hcp-sum-${s.id}-${side}">${teamHandicapSum(teamId)}</span>)</span>` : ''}${lineupOn ? ` <span style="font-size:12px; color:#0369A1; font-weight:400;">(סדר עמדות אישי — ניתן לשנות בחצים)</span>` : ''}${unlimited ? ` <span style="font-size:12px; color:#F59E0B; font-weight:400;">(רק 3 השחקנים המשחקים בעלי הממוצע הגבוה נספרים לניקוד הקבוצתי)</span>` : ''}</h4>
       <div class="table-wrap"><table>
         <thead><tr><th>שחקן</th>${hcpOn ? '<th>הנד&rsquo;</th>' : ''}${header}<th>נעדר</th></tr></thead>
         <tbody id="${tbodyId}">${rows || `<tr><td colspan="${colspan}" style="text-align:center;color:#94A3B8;">אין שחקנים בקבוצה זו</td></tr>`}</tbody>
@@ -2190,19 +2247,29 @@ function teamFullyAbsent(players, checkboxIdFn) {
   });
 }
 
+function updateCountedHcpLabel(id, value) {
+  const el = document.getElementById(id);
+  if (el) el.textContent = value;
+}
+
 function recalcMatchEntryTotals(scheduleId) {
   const s = DB.schedule.find(x => x.id === scheduleId);
   if (!s) return;
   const gamesCount = DB.settings.gamesPerMatch || 3;
   const aPlayers = DB.players.filter(p => p.teamId === s.teamAId);
   const bPlayers = DB.players.filter(p => p.teamId === s.teamBId);
-  const aHcpSum = teamHandicapSum(s.teamAId);
-  const bHcpSum = teamHandicapSum(s.teamBId);
+  const isAbsent = (side, p) => !!document.getElementById(`abs_${s.id}_${side}_${p.id}`)?.checked;
+  const aCounted = countedPlayerIds(s.teamAId, aPlayers, p => isAbsent('a', p));
+  const bCounted = countedPlayerIds(s.teamBId, bPlayers, p => isAbsent('b', p));
+  const aHcpSum = [...aCounted].reduce((sum, id) => sum + computeHandicap(id), 0);
+  const bHcpSum = [...bCounted].reduce((sum, id) => sum + computeHandicap(id), 0);
+  updateCountedHcpLabel(`hcp-sum-${s.id}-a`, aHcpSum);
+  updateCountedHcpLabel(`hcp-sum-${s.id}-b`, bHcpSum);
   const gamesData = [];
   for (let i = 0; i < gamesCount; i++) {
     let aRaw = 0, bRaw = 0, aBonus = 0, bBonus = 0;
-    aPlayers.forEach(p => { const el = document.getElementById(`sc_${s.id}_a_${p.id}_${i}`); const v = el ? clampScore(el.value) : 0; aRaw += v; aBonus += highScoreBonus(v); });
-    bPlayers.forEach(p => { const el = document.getElementById(`sc_${s.id}_b_${p.id}_${i}`); const v = el ? clampScore(el.value) : 0; bRaw += v; bBonus += highScoreBonus(v); });
+    aPlayers.forEach(p => { if (!aCounted.has(p.id)) return; const el = document.getElementById(`sc_${s.id}_a_${p.id}_${i}`); const v = el ? clampScore(el.value) : 0; aRaw += v; aBonus += highScoreBonus(v); });
+    bPlayers.forEach(p => { if (!bCounted.has(p.id)) return; const el = document.getElementById(`sc_${s.id}_b_${p.id}_${i}`); const v = el ? clampScore(el.value) : 0; bRaw += v; bBonus += highScoreBonus(v); });
     const aHcp = aRaw + aHcpSum, bHcp = bRaw + bHcpSum;
     const rawAEl = document.getElementById(`mt-raw-${s.id}-a-${i}`); if (rawAEl) rawAEl.textContent = aRaw;
     const rawBEl = document.getElementById(`mt-raw-${s.id}-b-${i}`); if (rawBEl) rawBEl.textContent = bRaw;
@@ -2261,17 +2328,20 @@ async function saveMatchEntry(scheduleId) {
   const gamesCount = DB.settings.gamesPerMatch || 3;
   const aPlayers = DB.players.filter(p => p.teamId === s.teamAId);
   const bPlayers = DB.players.filter(p => p.teamId === s.teamBId);
+  const isAbsent = (side, p) => !!document.getElementById(`abs_${s.id}_${side}_${p.id}`)?.checked;
+  const aCounted = countedPlayerIds(s.teamAId, aPlayers, p => isAbsent('a', p));
+  const bCounted = countedPlayerIds(s.teamBId, bPlayers, p => isAbsent('b', p));
   const playerHandicaps = {};
   [...aPlayers, ...bPlayers].forEach(p => { playerHandicaps[p.id] = computeHandicap(p.id); });
-  const aHcpSum = teamHandicapSum(s.teamAId);
-  const bHcpSum = teamHandicapSum(s.teamBId);
+  const aHcpSum = [...aCounted].reduce((sum, id) => sum + computeHandicap(id), 0);
+  const bHcpSum = [...bCounted].reduce((sum, id) => sum + computeHandicap(id), 0);
 
   const games = [];
   for (let i = 0; i < gamesCount; i++) {
     const playerScores = {};
     let aRaw = 0, bRaw = 0, aBonus = 0, bBonus = 0;
-    aPlayers.forEach(p => { const el = document.getElementById(`sc_${s.id}_a_${p.id}_${i}`); const v = el ? clampScore(el.value) : 0; playerScores[p.id] = v; aRaw += v; aBonus += highScoreBonus(v); });
-    bPlayers.forEach(p => { const el = document.getElementById(`sc_${s.id}_b_${p.id}_${i}`); const v = el ? clampScore(el.value) : 0; playerScores[p.id] = v; bRaw += v; bBonus += highScoreBonus(v); });
+    aPlayers.forEach(p => { const el = document.getElementById(`sc_${s.id}_a_${p.id}_${i}`); const v = el ? clampScore(el.value) : 0; playerScores[p.id] = v; if (aCounted.has(p.id)) { aRaw += v; aBonus += highScoreBonus(v); } });
+    bPlayers.forEach(p => { const el = document.getElementById(`sc_${s.id}_b_${p.id}_${i}`); const v = el ? clampScore(el.value) : 0; playerScores[p.id] = v; if (bCounted.has(p.id)) { bRaw += v; bBonus += highScoreBonus(v); } });
     games.push({
       gameNum: i + 1, playerScores,
       teamARawTotal: aRaw, teamBRawTotal: bRaw,
@@ -2299,6 +2369,7 @@ async function saveMatchEntry(scheduleId) {
     id, date: s.date, scheduleId: s.id, teamAId: s.teamAId, teamBId: s.teamBId, games,
     teamAPoints: aPoints, teamBPoints: bPoints, teamAForfeit, teamBForfeit,
     handicapEnabled: !!DB.settings.handicapEnabled, playerHandicaps,
+    teamACountedIds: [...aCounted], teamBCountedIds: [...bCounted],
     teamAOrder, teamBOrder,
     createdAt: new Date().toISOString()
   };
