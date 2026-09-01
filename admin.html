@@ -251,6 +251,9 @@ input[type="number"].score-input { text-align: center; padding: 8px 4px; font-we
         <thead><tr><th>קבוצה</th><th>מס׳ שחקנים</th><th></th></tr></thead>
         <tbody id="teams-tbody"></tbody>
       </table></div></div>
+
+      <h2 style="font-size:18px; margin:26px 0 14px;">תצוגת קבוצות מלאה</h2>
+      <div id="teams-roster-grid" style="display:grid; grid-template-columns:repeat(auto-fill,minmax(260px,1fr)); gap:16px;"></div>
     </div>
 
     <!-- PLAYERS -->
@@ -996,6 +999,32 @@ function renderTeams() {
       </td>
     </tr>`;
   }).join('') || '<tr><td colspan="3" style="text-align:center; color:#94A3B8;">אין קבוצות עדיין</td></tr>';
+  renderTeamsRosterGrid();
+}
+
+// Full-roster overview: one card per team with every player's average and
+// the team's total handicap, so a coach can see a whole team at a glance
+// without opening the players page and filtering.
+function renderTeamsRosterGrid() {
+  const el = document.getElementById('teams-roster-grid');
+  if (!el) return;
+  const hcpOn = DB.settings.handicapEnabled;
+  el.innerHTML = DB.teams.map(t => {
+    const players = DB.players.filter(p => p.teamId === t.id);
+    const rows = players.map(p => {
+      const st = playerStatsFor(p.id);
+      const avgText = st.games ? st.avg.toFixed(2) : (p.manualAverage != null ? `${p.manualAverage.toFixed(2)} <span style="color:#94A3B8; font-size:11px;">(ידני)</span>` : '—');
+      return `<tr><td>${p.name}</td><td style="text-align:center;">${avgText}</td></tr>`;
+    }).join('') || `<tr><td colspan="2" style="text-align:center; color:#94A3B8;">אין שחקנים בקבוצה זו</td></tr>`;
+    return `<div class="card" style="padding:16px;">
+      <h3 style="font-size:15px; margin-bottom:10px;"><span class="color-dot" style="background:${t.color || '#94A3B8'}"></span>${t.name}</h3>
+      <table style="width:100%;">
+        <thead><tr><th>שחקן</th><th style="text-align:center;">ממוצע</th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+      ${hcpOn ? `<p style="margin-top:12px; font-size:13px; color:#0369A1; font-weight:700;">סה"כ הנדיקפ קבוצתי: ${teamHandicapSum(t.id)}</p>` : ''}
+    </div>`;
+  }).join('') || '<p style="color:#94A3B8;">אין קבוצות עדיין</p>';
 }
 
 // Generates well-separated hues via the golden angle, so sequential teams
