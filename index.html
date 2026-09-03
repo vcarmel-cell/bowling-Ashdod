@@ -192,6 +192,24 @@ function computeRoundRobinTeamPoints(DB) {
   return teamPoints;
 }
 
+// Handicap for the public roster view — mirrors admin.html's
+// computeHandicap: manual handicap/average (for players without game
+// history yet) take priority over the auto formula, which otherwise
+// assumes "scratch" (handicap 0) until a player has a real average.
+function computeHandicap(DB, playerId, playerStats) {
+  if (!DB.settings.handicapEnabled) return 0;
+  const p = DB.players.find(x => x.id === playerId);
+  const st = playerStats[playerId] || { games: 0, total: 0 };
+  const basis = DB.settings.handicapBasis ?? 200;
+  const pct = (DB.settings.handicapPercent ?? 80) / 100;
+  if (!st.games) {
+    if (p && p.manualHandicap != null) return p.manualHandicap;
+    if (p && p.manualAverage != null) return Math.max(0, Math.round((basis - p.manualAverage) * pct));
+  }
+  const avg = st.games ? st.total / st.games : basis;
+  return Math.max(0, Math.round((basis - avg) * pct));
+}
+
 // Set inside renderContent() each render — lets the round <select> in the
 // "תוצאות אחרונות" tab re-render just its cards on change, without a full
 // page re-render or a module-level copy of DB.
@@ -291,6 +309,27 @@ function renderContent(DB) {
   const topSingleGamesWomen = singleGameEntries.filter(e => playerGender(e.pid) === 'אישה').sort((a, b) => b.score - a.score).slice(0, 3);
   const topSeriesWomen = seriesEntries.filter(e => playerGender(e.pid) === 'אישה').sort((a, b) => b.total - a.total).slice(0, 3);
 
+  // Team rosters: every player's average plus the team's total handicap.
+  const hcpOn = !!(DB.settings && DB.settings.handicapEnabled);
+  const teamsHtml = DB.teams.length ? DB.teams.map(t => {
+    const players = DB.players.filter(p => p.teamId === t.id);
+    const unlimited = t.name === 'פייסרים';
+    const rows = players.map(p => {
+      const st = playerStats[p.id] || { games: 0, total: 0 };
+      const avgText = st.games ? (st.total / st.games).toFixed(2) : (p.manualAverage != null ? `${p.manualAverage.toFixed(2)} <span style="color:#94A3B8; font-size:11px;">(ידני)</span>` : '—');
+      return `<tr><td>${p.name}</td><td style="text-align:center;">${avgText}</td></tr>`;
+    }).join('') || `<tr><td colspan="2" style="text-align:center; color:#94A3B8;">אין שחקנים בקבוצה זו</td></tr>`;
+    const hcpSum = players.reduce((s, p) => s + computeHandicap(DB, p.id, playerStats), 0);
+    return `<div class="card" style="padding:16px;">
+      <h3 style="font-size:15px; margin-bottom:10px;"><span class="color-dot" style="background:${t.color || '#94A3B8'}"></span>${t.name}${unlimited ? ` <span style="font-size:11px; color:#F59E0B; font-weight:400;">(ללא הגבלת שחקנים)</span>` : ''}</h3>
+      <div class="table-wrap"><table>
+        <thead><tr><th>שחקן</th><th style="text-align:center;">ממוצע</th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table></div>
+      ${hcpOn ? `<p style="margin-top:12px; font-size:13px; color:#0369A1; font-weight:700;">סה"כ הנדיקפ קבוצתי${unlimited ? ' (כל הקבוצה)' : ''}: ${hcpSum}</p>${unlimited ? `<p style="font-size:11px; color:#94A3B8;">בכל מחזור נספרים לניקוד רק 3 המשתתפים בעלי הממוצע הגבוה</p>` : ''}` : ''}
+    </div>`;
+  }).join('') : `<div class="card"><p style="text-align:center;color:#94A3B8;">אין קבוצות עדיין</p></div>`;
+
   const upcoming = DB.schedule.filter(s => s.status !== 'completed').sort((a, b) => (a.date || '').localeCompare(b.date || ''));
 
   // Round selector for the "תוצאות אחרונות" tab — defaults to the latest
@@ -335,6 +374,7 @@ function renderContent(DB) {
   el.innerHTML = `
     <div class="tabs">
       <div class="tab active" data-tab="standings" onclick="switchTab('standings')">&#x1F3C6; דירוג</div>
+      <div class="tab" data-tab="teams" onclick="switchTab('teams')">&#x1F465; קבוצות</div>
       <div class="tab" data-tab="schedule" onclick="switchTab('schedule')">&#x1F4C5; משחקים קרובים</div>
       <div class="tab" data-tab="results" onclick="switchTab('results')">&#x1F3AF; תוצאות אחרונות</div>
     </div>
@@ -486,6 +526,12 @@ function renderContent(DB) {
           </tbody>
         </table></div>
       </div>` : ''}
+    </div>
+
+    <div class="section" id="section-teams">
+      <div style="display:grid; grid-template-columns:repeat(auto-fill,minmax(260px,1fr)); gap:16px;">
+        ${teamsHtml}
+      </div>
     </div>
 
     <div class="section" id="section-schedule">
