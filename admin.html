@@ -6,6 +6,7 @@
 <title>ניהול ליגת באולינג</title>
 <style>
 * { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { overflow-x: hidden; }
 body { font-family: 'Segoe UI', Arial, sans-serif; background: #EFF9FF; color: #0C4A6E; direction: rtl; }
 
 .layout { display: flex; min-height: 100vh; }
@@ -16,7 +17,12 @@ body { font-family: 'Segoe UI', Arial, sans-serif; background: #EFF9FF; color: #
   position: fixed; top: 0; right: 0; bottom: 0; z-index: 100;
   box-shadow: -3px 0 18px rgba(0,0,0,0.18);
 }
-.main { margin-right: 225px; flex: 1; padding: 28px; }
+/* A flex item's default min-width is its content's min-content size, so a
+   wide unbroken table further down could force .main (and the whole page)
+   wider than the screen — pushing the fixed sidebar out of position and
+   making the browser zoom the layout out. min-width: 0 lets .main shrink to
+   the viewport and leaves overflow to .table-wrap's own scrollbar instead. */
+.main { margin-right: 225px; flex: 1; min-width: 0; padding: 28px; }
 
 .sidebar-header {
   padding: 24px 18px 18px;
