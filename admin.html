@@ -454,6 +454,11 @@ input[type="number"].score-input { text-align: center; padding: 8px 4px; font-we
       <label>צבע קבוצה</label>
       <input type="color" id="team-color" value="#0EA5E9" style="height:44px; padding:4px;">
     </div>
+    <div class="form-group">
+      <label>ראש קבוצה</label>
+      <select id="team-captain"><option value="">ללא ראש קבוצה</option></select>
+      <p style="font-size:12px; color:#94A3B8; margin-top:5px;">ראש הקבוצה יוצג ראשון ברשימת השחקנים בתצוגת הקבוצות המלאה (בעמוד הניהול ובעמוד המידע הציבורי).</p>
+    </div>
     <div class="modal-footer">
       <button class="btn btn-secondary" onclick="closeModal('team-modal')">ביטול</button>
       <button class="btn btn-primary" onclick="saveTeam()">שמור</button>
@@ -1012,16 +1017,26 @@ function renderTeams() {
 // Full-roster overview: one card per team with every player's average and
 // the team's total handicap, so a coach can see a whole team at a glance
 // without opening the players page and filtering.
+// Puts the team's captain (if set) first in the list; everyone else keeps
+// their existing relative order.
+function orderByCaptain(players, captainId) {
+  if (!captainId) return players;
+  const captain = players.find(p => p.id === captainId);
+  if (!captain) return players;
+  return [captain, ...players.filter(p => p.id !== captainId)];
+}
+
 function renderTeamsRosterGrid() {
   const el = document.getElementById('teams-roster-grid');
   if (!el) return;
   const hcpOn = DB.settings.handicapEnabled;
   el.innerHTML = DB.teams.map(t => {
-    const players = DB.players.filter(p => p.teamId === t.id);
+    const players = orderByCaptain(DB.players.filter(p => p.teamId === t.id), t.captainId);
     const rows = players.map(p => {
       const st = playerStatsFor(p.id);
       const avgText = st.games ? st.avg.toFixed(2) : (p.manualAverage != null ? `${p.manualAverage.toFixed(2)} <span style="color:#94A3B8; font-size:11px;">(ידני)</span>` : '—');
-      return `<tr><td>${p.name}</td><td style="text-align:center;">${avgText}</td></tr>`;
+      const captainLabel = p.id === t.captainId ? ` <span style="font-size:11px; color:#0369A1;">&#x1F451; (ראש קבוצה)</span>` : '';
+      return `<tr><td>${p.name}${captainLabel}</td><td style="text-align:center;">${avgText}</td></tr>`;
     }).join('') || `<tr><td colspan="2" style="text-align:center; color:#94A3B8;">אין שחקנים בקבוצה זו</td></tr>`;
     const unlimited = teamHasUnlimitedRoster(t.id);
     return `<div class="card" style="padding:16px;">
@@ -1097,8 +1112,13 @@ async function setupTeams() {
 function openTeamModal(id) {
   document.getElementById('team-id').value = id || '';
   document.getElementById('team-modal-title').textContent = id ? '✏️ עריכת קבוצה' : '👥 קבוצה חדשה';
+  const captainSelect = document.getElementById('team-captain');
+  const teamPlayers = id ? DB.players.filter(p => p.teamId === id) : [];
+  const t = id ? DB.teams.find(x => x.id === id) : null;
+  captainSelect.innerHTML = '<option value="">ללא ראש קבוצה</option>'
+    + teamPlayers.map(p => `<option value="${p.id}">${p.name}</option>`).join('');
+  captainSelect.value = (t && t.captainId) || '';
   if (id) {
-    const t = DB.teams.find(x => x.id === id);
     document.getElementById('team-name').value = t.name;
     document.getElementById('team-color').value = t.color || '#0EA5E9';
   } else {
@@ -1112,9 +1132,10 @@ function saveTeam() {
   const id = document.getElementById('team-id').value || uid('team');
   const name = document.getElementById('team-name').value.trim();
   const color = document.getElementById('team-color').value;
+  const captainId = document.getElementById('team-captain').value || null;
   if (!name) { toast('נא להזין שם קבוצה'); return; }
   const existing = DB.teams.find(t => t.id === id);
-  const data = { id, name, color, createdAt: existing ? existing.createdAt : new Date().toISOString() };
+  const data = { id, name, color, captainId, createdAt: existing ? existing.createdAt : new Date().toISOString() };
   if (existing) Object.assign(existing, data); else DB.teams.push(data);
   dbSave();
   fbSet('teams', id, data);
