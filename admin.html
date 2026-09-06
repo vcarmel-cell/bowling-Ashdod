@@ -1035,8 +1035,7 @@ function renderTeamsRosterGrid() {
     const rows = players.map(p => {
       const st = playerStatsFor(p.id);
       const avgText = st.games ? st.avg.toFixed(2) : (p.manualAverage != null ? `${p.manualAverage.toFixed(2)} <span style="color:#94A3B8; font-size:11px;">(ידני)</span>` : '—');
-      const captainLabel = p.id === t.captainId ? ` <span style="font-size:11px; color:#0369A1;">&#x1F451; (ראש קבוצה)</span>` : '';
-      return `<tr><td>${p.name}${captainLabel}</td><td style="text-align:center;">${avgText}</td></tr>`;
+      return `<tr><td>${p.name}</td><td style="text-align:center;">${avgText}</td></tr>`;
     }).join('') || `<tr><td colspan="2" style="text-align:center; color:#94A3B8;">אין שחקנים בקבוצה זו</td></tr>`;
     const unlimited = teamHasUnlimitedRoster(t.id);
     return `<div class="card" style="padding:16px;">
