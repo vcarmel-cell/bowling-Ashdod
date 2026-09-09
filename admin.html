@@ -556,8 +556,9 @@ input[type="number"].score-input { text-align: center; padding: 8px 4px; font-we
         <select id="sch-team-a"><option value="">בחר קבוצה</option></select>
       </div>
       <div class="form-group">
-        <label>קבוצה ב׳ *</label>
-        <select id="sch-team-b"><option value="">בחר קבוצה</option></select>
+        <label>קבוצה ב׳</label>
+        <select id="sch-team-b"><option value="">ללא יריבה (למשחק סולו)</option></select>
+        <p style="font-size:12px; color:#94A3B8; margin-top:5px;">אפשר להשאיר ריק רק אם קבוצה א׳ אינה משתתפת בתחרות הקבוצתית.</p>
       </div>
     </div>
     <div class="modal-footer">
@@ -997,15 +998,16 @@ function showPage(p) {
 // ─── DASHBOARD ───────────────────────────────────────────────
 function renderDashboard() {
   const upcoming = DB.schedule.filter(s => s.status !== 'completed').sort((a, b) => (a.date || '').localeCompare(b.date || ''));
-  const nextGame = upcoming[0];
+  const nextGame = upcoming.find(s => s.teamBId) || upcoming[0];
+  const vsLabel = s => s.teamBId ? `${teamName(s.teamAId)} נגד ${teamName(s.teamBId)}` : `${teamName(s.teamAId)} (ניקוד אישי)`;
   document.getElementById('dash-stats').innerHTML = `
     <div class="stat-card"><div class="stat-icon">&#x1F465;</div><div class="stat-label">קבוצות</div><div class="stat-value">${DB.teams.length}</div></div>
     <div class="stat-card"><div class="stat-icon">&#x1F3CB;&#xFE0F;</div><div class="stat-label">שחקנים</div><div class="stat-value">${DB.players.length}</div></div>
     <div class="stat-card"><div class="stat-icon">&#x1F3AF;</div><div class="stat-label">משחקים שהוזנו</div><div class="stat-value">${DB.results.length}</div></div>
-    <div class="stat-card"><div class="stat-icon">&#x1F4C5;</div><div class="stat-label">המשחק הבא</div><div class="stat-value" style="font-size:18px;">${nextGame ? fmtDate(nextGame.date) : '—'}</div>${nextGame ? `<div class="stat-sub">${teamName(nextGame.teamAId)} נגד ${teamName(nextGame.teamBId)}</div>` : ''}</div>
+    <div class="stat-card"><div class="stat-icon">&#x1F4C5;</div><div class="stat-label">המשחק הבא</div><div class="stat-value" style="font-size:18px;">${nextGame ? fmtDate(nextGame.date) : '—'}</div>${nextGame ? `<div class="stat-sub">${vsLabel(nextGame)}</div>` : ''}</div>
   `;
   document.getElementById('dash-upcoming-tbody').innerHTML = upcoming.slice(0, 6).map(s => `
-    <tr><td>${fmtDate(s.date)}</td><td>${s.time || '—'}</td><td>${teamName(s.teamAId)}</td><td>${teamName(s.teamBId)}</td></tr>
+    <tr><td>${fmtDate(s.date)}</td><td>${s.time || '—'}</td><td>${teamName(s.teamAId)}</td><td>${s.teamBId ? teamName(s.teamBId) : '<span style="color:#94A3B8;">ניקוד אישי</span>'}</td></tr>
   `).join('') || '<tr><td colspan="4" style="text-align:center; color:#94A3B8;">אין משחקים מתוכננים</td></tr>';
 
   const recent = DB.results.filter(r => !r.isPractice).sort((a, b) => (b.date || '').localeCompare(a.date || '')).slice(0, 6);
@@ -1203,16 +1205,20 @@ function teamPlayerCount(teamId, excludePlayerId) {
 
 function populateTeamSelects() {
   const opts = DB.teams.map(t => `<option value="${t.id}">${t.name}</option>`).join('');
-  // Teams excluded from team competition (currently just פייסרים) never get
-  // scheduled a team match, so they're left out of these two selects only —
-  // the player-filter select still needs to include them.
+  // A team excluded from team competition (currently just פייסרים) can
+  // still be picked as "קבוצה א׳" for a solo (opponent-less) schedule row,
+  // but never as the opponent in "קבוצה ב׳".
   const schedulableOpts = DB.teams.filter(t => !teamHasUnlimitedRoster(t.id)).map(t => `<option value="${t.id}">${t.name}</option>`).join('');
-  ['sch-team-a', 'sch-team-b'].forEach(elId => {
-    const el = document.getElementById(elId);
-    if (!el) return;
-    const placeholder = el.querySelector('option[value=""]');
-    el.innerHTML = (placeholder ? placeholder.outerHTML : '') + schedulableOpts;
-  });
+  const elA = document.getElementById('sch-team-a');
+  if (elA) {
+    const placeholder = elA.querySelector('option[value=""]');
+    elA.innerHTML = (placeholder ? placeholder.outerHTML : '') + opts;
+  }
+  const elB = document.getElementById('sch-team-b');
+  if (elB) {
+    const placeholder = elB.querySelector('option[value=""]');
+    elB.innerHTML = (placeholder ? placeholder.outerHTML : '') + schedulableOpts;
+  }
   const filterEl = document.getElementById('players-filter-team');
   if (filterEl) filterEl.innerHTML = '<option value="">כל הקבוצות</option>' + opts;
 }
@@ -1466,11 +1472,14 @@ function renderSchedule() {
   const list = [...DB.schedule].sort((a, b) => (a.date || '').localeCompare(b.date || ''));
   const roundDate = getCurrentRoundDate();
   document.getElementById('schedule-tbody').innerHTML = list.map(s => {
+    const isSolo = !s.teamBId;
     let actionBtn = '';
     if (s.status !== 'completed') {
-      actionBtn = s.date === roundDate
-        ? `<button class="btn btn-success btn-sm" onclick="openResultEntry()">הזן תוצאה</button>`
-        : `<span class="badge badge-gray" title="נפתח להזנה רק אחרי שכל תוצאות המחזור הקודם יוזנו">&#x1F512; ממתין</span>`;
+      actionBtn = isSolo
+        ? `<button class="btn btn-success btn-sm" onclick="showPage('practice')">הזן ניקוד אישי</button>`
+        : s.date === roundDate
+          ? `<button class="btn btn-success btn-sm" onclick="openResultEntry()">הזן תוצאה</button>`
+          : `<span class="badge badge-gray" title="נפתח להזנה רק אחרי שכל תוצאות המחזור הקודם יוזנו">&#x1F512; ממתין</span>`;
     }
     return `<tr>
       <td>${fmtDate(s.date)}</td>
@@ -1478,7 +1487,7 @@ function renderSchedule() {
       <td>${s.lane || '—'}</td>
       <td>${s.round || '—'}</td>
       <td>${teamName(s.teamAId)}</td>
-      <td>${teamName(s.teamBId)}</td>
+      <td>${isSolo ? '<span style="color:#94A3B8;">ללא יריבה</span>' : teamName(s.teamBId)}</td>
       <td>${s.status === 'completed' ? '<span class="badge badge-green">הושלם</span>' : '<span class="badge badge-yellow">מתוזמן</span>'}</td>
       <td style="white-space:nowrap;">
         ${actionBtn}
@@ -1516,9 +1525,11 @@ function saveSchedule() {
   const id = document.getElementById('sch-id').value || uid('sched');
   const date = document.getElementById('sch-date').value;
   const teamAId = document.getElementById('sch-team-a').value;
-  const teamBId = document.getElementById('sch-team-b').value;
+  const teamBId = document.getElementById('sch-team-b').value || null;
   if (!date) { toast('נא לבחור תאריך'); return; }
-  if (!teamAId || !teamBId || teamAId === teamBId) { toast('נא לבחור שתי קבוצות שונות'); return; }
+  if (!teamAId) { toast('נא לבחור קבוצה'); return; }
+  if (!teamBId && !teamHasUnlimitedRoster(teamAId)) { toast('נא לבחור קבוצה יריבה'); return; }
+  if (teamBId && teamAId === teamBId) { toast('נא לבחור שתי קבוצות שונות'); return; }
   const existing = DB.schedule.find(s => s.id === id);
   const data = {
     id, date, teamAId, teamBId,
@@ -1630,9 +1641,11 @@ function updateAutoSchedulePreview() {
   const totalGames = gamesPerPass * repeats;
   const endDate = start ? addDays(start, (totalRounds - 1) * interval) : null;
   const laneOptions = generateLanePairs(DB.settings.laneStart, DB.settings.laneEnd);
+  const soloTeam = DB.teams.find(t => teamHasUnlimitedRoster(t.id));
   previewEl.innerHTML = `${roundsPerPass} מחזורים בכל מעבר (${gamesPerPass} משחקים) &times; ${repeats} חזרות = <strong>${totalRounds} מחזורים, ${totalGames} משחקים</strong> בסה"כ.` +
     (endDate ? `<br>מ-${fmtDate(start)} עד ${fmtDate(endDate)}.` : '') +
     (n % 2 === 1 ? '<br>מספר קבוצות אי-זוגי — קבוצה אחת תנוח בכל מחזור.' : '') +
+    (soloTeam ? `<br>ל-${soloTeam.name} ייווצר משחק סולו (ללא יריבה) בכל מחזור, לניקוד אישי בלבד.` : '') +
     (laneOptions.length
       ? `<br>מסלולים יוקצו אוטומטית ויתחלפו כל מחזור (${laneOptions.join(', ')}).`
       : '<br>לא הוגדרו מסלולים בהגדרות — המשחקים ייווצרו ללא מסלול קבוע.');
@@ -1663,6 +1676,11 @@ function generateAutoSchedule() {
     DB.schedule = DB.schedule.filter(s => s.status === 'completed');
 
     const rounds = roundRobinRounds(schedulableTeams().map(t => t.id));
+    // A team excluded from the team competition still plays on the same
+    // league nights — give it one opponent-less schedule row per round so
+    // it shows on the schedule and gets its own print form, without ever
+    // gating the round-entry flow (that only waits on two-team matches).
+    const soloTeam = DB.teams.find(t => teamHasUnlimitedRoster(t.id));
     const newSchedule = [];
     let globalRound = 0;
     for (let pass = 0; pass < repeats; pass++) {
@@ -1681,6 +1699,12 @@ function generateAutoSchedule() {
           };
           newSchedule.push(data);
         });
+        if (soloTeam) {
+          newSchedule.push({
+            id: uid('sched'), date, time, lane: '', round: roundLabel,
+            teamAId: soloTeam.id, teamBId: null, status: 'scheduled'
+          });
+        }
         globalRound++;
       });
     }
@@ -1759,7 +1783,7 @@ function updatePrintFormPreview() {
   const date = document.getElementById('print-form-date').value;
   const games = DB.schedule.filter(s => s.date === date && s.status !== 'completed');
   document.getElementById('print-form-preview').innerHTML = games.length
-    ? `${games.length} משחקים בתאריך זה: ` + games.map(s => `${teamName(s.teamAId)} נגד ${teamName(s.teamBId)}`).join(', ')
+    ? `${games.length} משחקים בתאריך זה: ` + games.map(s => s.teamBId ? `${teamName(s.teamAId)} נגד ${teamName(s.teamBId)}` : `${teamName(s.teamAId)} (ניקוד אישי)`).join(', ')
     : 'אין משחקים בתאריך זה';
 }
 
@@ -1786,9 +1810,12 @@ function printResultsForm() {
     ).join('') || `<tr><td colspan="${gamesCount + 2}">אין שחקנים בקבוצה זו</td></tr>`;
   }
 
-  function teamTable(teamId) {
+  // soloMode (for a team excluded from the team competition) drops the
+  // handicap row and the team-pins footer — neither means anything without
+  // an opponent to compare against.
+  function teamTable(teamId, soloMode) {
     const totalCells = Array.from({ length: gamesCount }, () => `<td class="score-cell"></td>`).join('');
-    const hcpRow = hcpOn ? (() => {
+    const hcpRow = (hcpOn && !soloMode) ? (() => {
       const hcpSum = teamHandicapSum(teamId);
       const hcpCells = Array.from({ length: gamesCount }, () => `<td>${hcpSum}</td>`).join('');
       return `<tr class="hcp-row"><td>סך הנדיקפ קבוצתי</td>${hcpCells}<td>${hcpSum}</td></tr>`;
@@ -1797,7 +1824,7 @@ function printResultsForm() {
       ${colgroup}
       <thead><tr><th>${teamName(teamId)}</th>${gamesHeader}<th>סה"כ אישי</th></tr></thead>
       <tbody>${playerRows(teamId)}${hcpRow}</tbody>
-      <tfoot><tr class="total-row"><td>סה"כ פינים קבוצתי</td>${totalCells}<td class="score-cell"></td></tr></tfoot>
+      ${soloMode ? '' : `<tfoot><tr class="total-row"><td>סה"כ פינים קבוצתי</td>${totalCells}<td class="score-cell"></td></tr></tfoot>`}
     </table>`;
   }
 
@@ -1814,7 +1841,7 @@ function printResultsForm() {
     </table>`;
   }
 
-  const formsHtml = games.map(s => `
+  const formsHtml = games.map(s => s.teamBId ? `
     <div class="print-form-game">
       <h3>${teamName(s.teamAId)} נגד ${teamName(s.teamBId)}</h3>
       <div class="meta">${fmtDate(s.date)}${s.time ? ' · שעה ' + s.time : ''}${s.lane ? ' · מסלול ' + s.lane : ''}${s.round ? ' · ' + s.round : ''}</div>
@@ -1822,6 +1849,12 @@ function printResultsForm() {
       ${teamTable(s.teamBId)}
       <div class="points-label">תוצאות בנקודות (למילוי ע"י השחקנים)</div>
       ${pointsTable(s)}
+    </div>
+  ` : `
+    <div class="print-form-game">
+      <h3>${teamName(s.teamAId)} — ניקוד אישי</h3>
+      <div class="meta">${fmtDate(s.date)}${s.time ? ' · שעה ' + s.time : ''}${s.lane ? ' · מסלול ' + s.lane : ''}${s.round ? ' · ' + s.round : ''}</div>
+      ${teamTable(s.teamAId, true)}
     </div>
   `).join('');
 
@@ -1945,7 +1978,13 @@ function renderPracticePage() {
   }).join('') || '<tr><td colspan="3" style="text-align:center; color:#94A3B8;">אין משחקי תרגול עדיין</td></tr>';
 }
 
-function buildPracticeFormHtml(gamesCount) {
+// Pending solo schedule rows (opponent-less, not completed) — a practice
+// entry for one of these dates flips its status to 'completed' on save.
+function pendingSoloScheduleDates() {
+  return [...new Set(DB.schedule.filter(s => !s.teamBId && s.status !== 'completed').map(s => s.date))].sort();
+}
+
+function buildPracticeFormHtml(gamesCount, defaultDate) {
   const players = practiceEligiblePlayers();
   const n = gamesCount || DB.settings.gamesPerMatch || 3;
   const header = Array.from({ length: n }, (_, i) => `<th style="text-align:center;">משחק ${i + 1}</th>`).join('');
@@ -1955,13 +1994,15 @@ function buildPracticeFormHtml(gamesCount) {
     ).join('');
     return `<tr><td>${p.name}</td>${cells}</tr>`;
   }).join('') || `<tr><td colspan="${n + 1}" style="text-align:center; color:#94A3B8;">אין שחקנים ללא קבוצה מתחרה</td></tr>`;
+  const pendingDates = pendingSoloScheduleDates();
+  const date = defaultDate || pendingDates[0] || todayStr();
   return `
     <h2 style="margin-bottom:14px;">משחק תרגול חדש</h2>
     <div class="form-row">
-      <div class="form-group"><label>תאריך</label><input type="date" id="prac-date" value="${todayStr()}"></div>
+      <div class="form-group"><label>תאריך</label><input type="date" id="prac-date" value="${date}"></div>
       <div class="form-group"><label>מספר משחקים</label><input type="number" id="prac-games-count" min="1" max="10" value="${n}" onchange="renderPracticeForm(this.value)"></div>
     </div>
-    <p style="font-size:12px; color:#94A3B8; margin-bottom:10px;">מלא ניקוד רק לשחקנים שאכן שיחקו באותו ערב — שורה ריקה לגמרי לא תישמר.</p>
+    <p style="font-size:12px; color:#94A3B8; margin-bottom:10px;">מלא ניקוד רק לשחקנים שאכן שיחקו באותו ערב — שורה ריקה לגמרי לא תישמר. אם התאריך תואם משחק מתוזמן בלוח, הוא יסומן כהושלם.</p>
     <div class="table-wrap"><table>
       <thead><tr><th>שחקן</th>${header}</tr></thead>
       <tbody>${rows}</tbody>
@@ -1972,7 +2013,8 @@ function buildPracticeFormHtml(gamesCount) {
 }
 
 function renderPracticeForm(gamesCount) {
-  document.getElementById('practice-form-card').innerHTML = buildPracticeFormHtml(Math.max(1, parseInt(gamesCount) || 3));
+  const currentDate = document.getElementById('prac-date')?.value;
+  document.getElementById('practice-form-card').innerHTML = buildPracticeFormHtml(Math.max(1, parseInt(gamesCount) || 3), currentDate);
 }
 
 async function savePracticeEntry() {
@@ -1991,14 +2033,18 @@ async function savePracticeEntry() {
     }
   });
   if (!playedTeamId) { toast('נא להזין ניקוד לפחות לשחקן אחד'); return; }
+  // Link to the matching solo schedule row (if any) so it moves out of the
+  // "לוח משחקים" pending list, same as a real match completing does.
+  const scheduleRow = DB.schedule.find(s => s.date === date && !s.teamBId && s.teamAId === playedTeamId);
   const id = uid('prac');
-  const data = { id, date, isPractice: true, teamAId: playedTeamId, teamBId: null, games, createdAt: new Date().toISOString() };
+  const data = { id, date, isPractice: true, teamAId: playedTeamId, teamBId: null, scheduleId: scheduleRow ? scheduleRow.id : null, games, createdAt: new Date().toISOString() };
   DB.results.push(data);
+  if (scheduleRow) scheduleRow.status = 'completed';
   dbSave();
   renderPracticePage();
   toast('✅ משחק התרגול נשמר');
   try {
-    await fbSet('results', id, data);
+    await Promise.all([fbSet('results', id, data), ...(scheduleRow ? [fbSet('schedule', scheduleRow.id, scheduleRow)] : [])]);
   } catch(e) {
     toast('⚠️ נשמר מקומית אך לא בענן — לך להגדרות ולחץ "העלה נתונים מקומיים לענן"');
   }
@@ -2006,10 +2052,16 @@ async function savePracticeEntry() {
 
 function deletePracticeEntry(id) {
   confirmAction('מחיקת משחק תרגול', 'למחוק את משחק התרגול? הממוצע האישי של השחקנים יתעדכן בהתאם.', () => {
+    const r = DB.results.find(x => x.id === id);
     DB.results = DB.results.filter(x => x.id !== id);
+    if (r && r.scheduleId) {
+      const s = DB.schedule.find(x => x.id === r.scheduleId);
+      if (s) { s.status = 'scheduled'; fbSet('schedule', s.id, s); }
+    }
     dbSave();
     fbDel('results', id);
     renderPracticePage();
+    renderSchedule();
     toast('🗑️ משחק התרגול נמחק');
   });
 }
@@ -2209,8 +2261,10 @@ async function saveEditResult() {
 // Entry is round-gated: only the games on the oldest date that still has
 // unfinished games are enterable. Later rounds only appear once every game
 // on the current round has a saved result.
+// Only two-team matches gate the round — a solo (opponent-less) row is
+// entered separately via "ניקוד אישי" and never blocks/waits on this flow.
 function getCurrentRoundDate() {
-  const pending = DB.schedule.filter(s => s.status !== 'completed');
+  const pending = DB.schedule.filter(s => s.status !== 'completed' && s.teamBId);
   if (!pending.length) return null;
   return pending.reduce((min, s) => (s.date < min ? s.date : min), pending[0].date);
 }
@@ -2229,7 +2283,7 @@ function renderResultEntryPage() {
     wrapEl.innerHTML = `<div class="card"><p style="text-align:center;color:#94A3B8;padding:30px;">כל המשחקים המתוזמנים כבר הוזנו. אפשר להוסיף עוד משחקים בלוח המשחקים.</p></div>`;
     return;
   }
-  const roundMatches = DB.schedule.filter(s => s.status !== 'completed' && s.date === roundDate);
+  const roundMatches = DB.schedule.filter(s => s.status !== 'completed' && s.teamBId && s.date === roundDate);
   subtitleEl.textContent = `מחזור ${fmtDate(roundDate)} — ${roundMatches.length} משחק${roundMatches.length === 1 ? '' : 'ים'} ממתינים להזנה`;
   wrapEl.innerHTML = roundMatches.map(s => buildMatchEntryCard(s)).join('');
   roundMatches.forEach(s => recalcMatchEntryTotals(s.id));

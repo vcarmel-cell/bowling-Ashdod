@@ -560,7 +560,7 @@ function renderContent(DB) {
                 <td>${s.lane || '—'}</td>
                 <td>${s.round || '—'}</td>
                 <td>${teamName(s.teamAId)}</td>
-                <td>${teamName(s.teamBId)}</td>
+                <td>${s.teamBId ? teamName(s.teamBId) : '<span style="color:#94A3B8;">ניקוד אישי</span>'}</td>
               </tr>`).join('') : `<tr><td colspan="6" style="text-align:center;color:#94A3B8;">אין משחקים מתוכננים</td></tr>`}
           </tbody>
         </table></div>
