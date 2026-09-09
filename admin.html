@@ -191,11 +191,15 @@ input[type="number"].score-input { text-align: center; padding: 8px 4px; font-we
 .print-form-game .total-row td { font-weight: 800; background: #F0F9FF; }
 .print-form-game .hcp-row td { font-style: italic; color: #0369A1; background: #F8FCFF; }
 .print-form-game .points-label { font-size: 13px; font-weight: 700; margin: 12px 0 6px; color: #0C4A6E; }
+.print-form-solo { page-break-before: always; }
 
 @media print {
-  body * { visibility: hidden; }
-  #print-area, #print-area * { visibility: visible; }
-  #print-area { display: block !important; position: absolute; top: 0; left: 0; width: 100%; }
+  /* visibility:hidden keeps hidden elements' height in the page layout —
+     the whole admin app behind the print area (sidebar + whatever page
+     was open) was still generating blank trailing pages. display:none
+     actually removes it from flow instead. */
+  body > *:not(#print-area) { display: none !important; }
+  #print-area { display: block !important; }
 }
 </style>
 </head>
@@ -1851,7 +1855,7 @@ function printResultsForm() {
       ${pointsTable(s)}
     </div>
   ` : `
-    <div class="print-form-game">
+    <div class="print-form-game print-form-solo">
       <h3>${teamName(s.teamAId)} — ניקוד אישי</h3>
       <div class="meta">${fmtDate(s.date)}${s.time ? ' · שעה ' + s.time : ''}${s.lane ? ' · מסלול ' + s.lane : ''}${s.round ? ' · ' + s.round : ''}</div>
       ${teamTable(s.teamAId, true)}
