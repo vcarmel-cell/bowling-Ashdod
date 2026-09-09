@@ -144,6 +144,13 @@ function gameTotal(g, side) {
   return g[`team${side}HcpTotal`] ?? g[`team${side}Total`] ?? 0;
 }
 
+// Teams excluded from the team competition (currently just פייסרים) never
+// get a scheduled match, so they're left out of standings/team records
+// entirely — their players' games only count toward personal stats.
+function schedulableTeams(DB) {
+  return DB.teams.filter(t => t.name !== 'פייסרים');
+}
+
 // Alternative scoring: every team in a round (same date) is compared
 // against every OTHER team that played that date, not just its own
 // scheduled pairing — 1 point per game beaten (0.5 on a tie), 1 more for
@@ -158,12 +165,12 @@ function computeRoundRobinTeamPoints(DB) {
   const gw = DB.settings.pointsPerGameWin ?? 1;
   const sw = DB.settings.pointsPerSeriesWin ?? 2;
   const byDate = {};
-  DB.results.forEach(r => {
+  DB.results.filter(r => !r.isPractice).forEach(r => {
     if (!byDate[r.date]) byDate[r.date] = [];
     byDate[r.date].push(r);
   });
   const teamPoints = {};
-  DB.teams.forEach(t => { teamPoints[t.id] = 0; });
+  schedulableTeams(DB).forEach(t => { teamPoints[t.id] = 0; });
   Object.values(byDate).forEach(roundResults => {
     const roundTeams = {};
     roundResults.forEach(r => {
@@ -224,8 +231,8 @@ function renderContent(DB) {
   // Team standings
   const altPoints = DB.settings && DB.settings.scoringMethod === 'roundRobin' ? computeRoundRobinTeamPoints(DB) : null;
   const teamMap = {};
-  DB.teams.forEach(t => { teamMap[t.id] = { team: t, played: 0, points: 0, pins: 0 }; });
-  DB.results.forEach(r => {
+  schedulableTeams(DB).forEach(t => { teamMap[t.id] = { team: t, played: 0, points: 0, pins: 0 }; });
+  DB.results.filter(r => !r.isPractice).forEach(r => {
     const a = teamMap[r.teamAId], b = teamMap[r.teamBId];
     const aPins = (r.games || []).reduce((s, g) => s + gameTotal(g, 'A'), 0);
     const bPins = (r.games || []).reduce((s, g) => s + gameTotal(g, 'B'), 0);
@@ -259,10 +266,11 @@ function renderContent(DB) {
   const teamCell = pid => playerTeamId(pid) ? `<span class="color-dot" style="background:${teamColor(playerTeamId(pid))}"></span>${teamName(playerTeamId(pid))}` : '—';
 
   // Round all-stars: top 5 individual series totals from the most recent match date
-  const latestDate = DB.results.length ? DB.results.reduce((max, r) => (r.date > max ? r.date : max), DB.results[0].date) : null;
+  const leagueResults = DB.results.filter(r => !r.isPractice);
+  const latestDate = leagueResults.length ? leagueResults.reduce((max, r) => (r.date > max ? r.date : max), leagueResults[0].date) : null;
   const roundEntries = [];
   if (latestDate) {
-    DB.results.filter(r => r.date === latestDate).forEach(r => {
+    leagueResults.filter(r => r.date === latestDate).forEach(r => {
       const pids = new Set();
       (r.games || []).forEach(g => Object.keys(g.playerScores || {}).forEach(pid => pids.add(pid)));
       pids.forEach(pid => {
@@ -272,7 +280,7 @@ function renderContent(DB) {
     });
   }
   const roundAllStars = roundEntries.sort((a, b) => b.total - a.total).slice(0, 5);
-  const lastRoundResults = latestDate ? DB.results.filter(r => r.date === latestDate) : [];
+  const lastRoundResults = latestDate ? leagueResults.filter(r => r.date === latestDate) : [];
 
   // All-time single-game high scores (top 3)
   const singleGameEntries = [];
@@ -297,7 +305,7 @@ function renderContent(DB) {
 
   // All-time team series high (top 3) — same handicap-inclusive totals used in team standings
   const teamSeriesEntries = [];
-  DB.results.forEach(r => {
+  leagueResults.forEach(r => {
     const aTotal = (r.games || []).reduce((s, g) => s + gameTotal(g, 'A'), 0);
     const bTotal = (r.games || []).reduce((s, g) => s + gameTotal(g, 'B'), 0);
     teamSeriesEntries.push({ teamId: r.teamAId, total: aTotal, date: r.date });
@@ -326,12 +334,12 @@ function renderContent(DB) {
     }).join('') || `<tr><td colspan="2" style="text-align:center; color:#94A3B8;">אין שחקנים בקבוצה זו</td></tr>`;
     const hcpSum = players.reduce((s, p) => s + computeHandicap(DB, p.id, playerStats), 0);
     return `<div class="card" style="padding:16px;">
-      <h3 style="font-size:15px; margin-bottom:10px;"><span class="color-dot" style="background:${t.color || '#94A3B8'}"></span>${t.name}${unlimited ? ` <span style="font-size:11px; color:#F59E0B; font-weight:400;">(ללא הגבלת שחקנים)</span>` : ''}</h3>
+      <h3 style="font-size:15px; margin-bottom:10px;"><span class="color-dot" style="background:${t.color || '#94A3B8'}"></span>${t.name}${unlimited ? ` <span style="font-size:11px; color:#F59E0B; font-weight:400;">(לא משתתפת בתחרות הקבוצתית)</span>` : ''}</h3>
       <div class="table-wrap"><table>
         <thead><tr><th>שחקן</th><th style="text-align:center;">ממוצע</th></tr></thead>
         <tbody>${rows}</tbody>
       </table></div>
-      ${hcpOn ? `<p style="margin-top:12px; font-size:13px; color:#0369A1; font-weight:700;">סה"כ הנדיקפ קבוצתי${unlimited ? ' (כל הקבוצה)' : ''}: ${hcpSum}</p>${unlimited ? `<p style="font-size:11px; color:#94A3B8;">בכל מחזור נספרים לניקוד רק 3 המשתתפים בעלי הממוצע הגבוה</p>` : ''}` : ''}
+      ${unlimited ? `<p style="font-size:11px; color:#94A3B8; margin-top:12px;">משחקי השחקנים נספרים רק לממוצע האישי שלהם</p>` : (hcpOn ? `<p style="margin-top:12px; font-size:13px; color:#0369A1; font-weight:700;">סה"כ הנדיקפ קבוצתי: ${hcpSum}</p>` : '')}
     </div>`;
   }).join('') : `<div class="card"><p style="text-align:center;color:#94A3B8;">אין קבוצות עדיין</p></div>`;
 
@@ -339,10 +347,10 @@ function renderContent(DB) {
 
   // Round selector for the "תוצאות אחרונות" tab — defaults to the latest
   // played round, but any round with saved results can be picked.
-  const resultRoundDates = [...new Set(DB.results.map(r => r.date))].sort().reverse();
+  const resultRoundDates = [...new Set(leagueResults.map(r => r.date))].sort().reverse();
 
   function buildResultCardsHtml(dateStr) {
-    const results = dateStr ? DB.results.filter(r => r.date === dateStr) : [];
+    const results = dateStr ? leagueResults.filter(r => r.date === dateStr) : [];
     return results.length ? results.map(r => {
       const aPins = (r.games || []).reduce((s, g) => s + gameTotal(g, 'A'), 0);
       const bPins = (r.games || []).reduce((s, g) => s + gameTotal(g, 'B'), 0);

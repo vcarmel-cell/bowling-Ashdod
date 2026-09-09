@@ -217,6 +217,7 @@ input[type="number"].score-input { text-align: center; padding: 8px 4px; font-we
       <a onclick="showPage('players')" id="nav-players"><span class="icon">&#x1F3CB;&#xFE0F;</span><span>שחקנים</span></a>
       <a onclick="showPage('schedule')" id="nav-schedule"><span class="icon">&#x1F4C5;</span><span>לוח משחקים</span></a>
       <a onclick="showPage('results')" id="nav-results"><span class="icon">&#x1F3AF;</span><span>תוצאות</span></a>
+      <a onclick="showPage('practice')" id="nav-practice"><span class="icon">&#x1F3B3;</span><span>ניקוד אישי</span></a>
       <a onclick="showPage('standings')" id="nav-standings"><span class="icon">&#x1F3C6;</span><span>דירוג וסטטיסטיקות</span></a>
       <a onclick="showPage('settings')" id="nav-settings"><span class="icon">&#x2699;&#xFE0F;</span><span>הגדרות</span></a>
     </div>
@@ -309,6 +310,18 @@ input[type="number"].score-input { text-align: center; padding: 8px 4px; font-we
       <div class="card"><div class="table-wrap"><table>
         <thead><tr><th>תאריך</th><th>קבוצה א׳</th><th>קבוצה ב׳</th><th>פינים</th><th>נקודות</th><th></th></tr></thead>
         <tbody id="results-tbody"></tbody>
+      </table></div></div>
+    </div>
+
+    <!-- PRACTICE SCORES (players not competing as a team) -->
+    <div id="page-practice" class="page">
+      <div class="page-header">
+        <div><h1>&#x1F3B3; ניקוד אישי</h1><p>למשחקי שחקנים שאינם משתתפים בתחרות הקבוצתית — נספר רק לממוצע האישי שלהם</p></div>
+      </div>
+      <div class="card" id="practice-form-card"></div>
+      <div class="card"><div class="table-wrap"><table>
+        <thead><tr><th>תאריך</th><th>שחקנים</th><th></th></tr></thead>
+        <tbody id="practice-tbody"></tbody>
       </table></div></div>
     </div>
 
@@ -966,6 +979,7 @@ const RENDERERS = {
   players: renderPlayers,
   schedule: renderSchedule,
   results: renderResults,
+  practice: renderPracticePage,
   standings: renderStandings,
   settings: renderSettings,
   'result-entry': null
@@ -994,7 +1008,7 @@ function renderDashboard() {
     <tr><td>${fmtDate(s.date)}</td><td>${s.time || '—'}</td><td>${teamName(s.teamAId)}</td><td>${teamName(s.teamBId)}</td></tr>
   `).join('') || '<tr><td colspan="4" style="text-align:center; color:#94A3B8;">אין משחקים מתוכננים</td></tr>';
 
-  const recent = [...DB.results].sort((a, b) => (b.date || '').localeCompare(a.date || '')).slice(0, 6);
+  const recent = DB.results.filter(r => !r.isPractice).sort((a, b) => (b.date || '').localeCompare(a.date || '')).slice(0, 6);
   document.getElementById('dash-recent-tbody').innerHTML = recent.map(r => `
     <tr><td>${fmtDate(r.date)}</td><td>${teamName(r.teamAId)}</td><td>${teamName(r.teamBId)}</td><td><span class="badge badge-blue">${r.teamAPoints} : ${r.teamBPoints}</span></td></tr>
   `).join('') || '<tr><td colspan="4" style="text-align:center; color:#94A3B8;">אין תוצאות עדיין</td></tr>';
@@ -1042,12 +1056,12 @@ function renderTeamsRosterGrid() {
     }).join('') || `<tr><td colspan="2" style="text-align:center; color:#94A3B8;">אין שחקנים בקבוצה זו</td></tr>`;
     const unlimited = teamHasUnlimitedRoster(t.id);
     return `<div class="card" style="padding:16px;">
-      <h3 style="font-size:15px; margin-bottom:10px;"><span class="color-dot" style="background:${t.color || '#94A3B8'}"></span>${t.name}${unlimited ? ` <span style="font-size:11px; color:#F59E0B; font-weight:400;">(ללא הגבלת שחקנים)</span>` : ''}</h3>
+      <h3 style="font-size:15px; margin-bottom:10px;"><span class="color-dot" style="background:${t.color || '#94A3B8'}"></span>${t.name}${unlimited ? ` <span style="font-size:11px; color:#F59E0B; font-weight:400;">(לא משתתפת בתחרות הקבוצתית)</span>` : ''}</h3>
       <table style="width:100%;">
         <thead><tr><th>שחקן</th><th style="text-align:center;">ממוצע</th></tr></thead>
         <tbody>${rows}</tbody>
       </table>
-      ${hcpOn ? `<p style="margin-top:12px; font-size:13px; color:#0369A1; font-weight:700;">סה"כ הנדיקפ קבוצתי (כל הקבוצה): ${teamHandicapSum(t.id)}</p>${unlimited ? `<p style="font-size:11px; color:#94A3B8;">בכל מחזור נספרים לניקוד רק 3 המשתתפים בעלי הממוצע הגבוה</p>` : ''}` : ''}
+      ${unlimited ? `<p style="font-size:11px; color:#94A3B8; margin-top:12px;">משחקי השחקנים נספרים רק לממוצע האישי שלהם (דרך "ניקוד אישי")</p>` : (hcpOn ? `<p style="margin-top:12px; font-size:13px; color:#0369A1; font-weight:700;">סה"כ הנדיקפ קבוצתי: ${teamHandicapSum(t.id)}</p>` : '')}
     </div>`;
   }).join('') || '<p style="color:#94A3B8;">אין קבוצות עדיין</p>';
 }
@@ -1168,10 +1182,13 @@ function deleteTeam(id) {
 // ─── PLAYERS ─────────────────────────────────────────────────
 const MAX_PLAYERS_PER_TEAM = 3;
 
-// "פייסרים" is the one team allowed an unlimited roster — every other team
-// still caps at MAX_PLAYERS_PER_TEAM. Only UNLIMITED_ROSTER_COUNT of its
-// players (the highest-average ones actually playing that round) count
-// toward the team's score; see countedPlayerIds below.
+// "פייסרים" is the one team with an unlimited roster and no player cap.
+// It no longer takes part in the team competition at all (no scheduled
+// matches, no team standings) — its players only ever play for their
+// personal average, entered via the practice-score screen below. The old
+// countedPlayerIds "top 3 per round" logic further down is now unreachable
+// dead code since this team can't be scheduled a match anymore; left in
+// place rather than ripped out mid-feature-change.
 const UNLIMITED_ROSTER_TEAM_NAME = 'פייסרים';
 const UNLIMITED_ROSTER_COUNT = 3;
 
@@ -1186,11 +1203,15 @@ function teamPlayerCount(teamId, excludePlayerId) {
 
 function populateTeamSelects() {
   const opts = DB.teams.map(t => `<option value="${t.id}">${t.name}</option>`).join('');
+  // Teams excluded from team competition (currently just פייסרים) never get
+  // scheduled a team match, so they're left out of these two selects only —
+  // the player-filter select still needs to include them.
+  const schedulableOpts = DB.teams.filter(t => !teamHasUnlimitedRoster(t.id)).map(t => `<option value="${t.id}">${t.name}</option>`).join('');
   ['sch-team-a', 'sch-team-b'].forEach(elId => {
     const el = document.getElementById(elId);
     if (!el) return;
     const placeholder = el.querySelector('option[value=""]');
-    el.innerHTML = (placeholder ? placeholder.outerHTML : '') + opts;
+    el.innerHTML = (placeholder ? placeholder.outerHTML : '') + schedulableOpts;
   });
   const filterEl = document.getElementById('players-filter-team');
   if (filterEl) filterEl.innerHTML = '<option value="">כל הקבוצות</option>' + opts;
@@ -1589,14 +1610,20 @@ function openAutoScheduleModal() {
   openModalEl('auto-schedule-modal');
 }
 
+// Teams that actually play scheduled team matches — excludes any team
+// (currently just פייסרים) that's opted out of the team competition.
+function schedulableTeams() {
+  return DB.teams.filter(t => !teamHasUnlimitedRoster(t.id));
+}
+
 function updateAutoSchedulePreview() {
-  const n = DB.teams.length;
+  const n = schedulableTeams().length;
   const previewEl = document.getElementById('auto-sch-preview');
-  if (n < 2) { previewEl.innerHTML = 'צריך לפחות 2 קבוצות'; return; }
+  if (n < 2) { previewEl.innerHTML = 'צריך לפחות 2 קבוצות המשתתפות במשחק הקבוצתי'; return; }
   const start = document.getElementById('auto-sch-start-date').value;
   const interval = Math.max(1, parseInt(document.getElementById('auto-sch-interval').value) || 7);
   const repeats = Math.max(1, parseInt(document.getElementById('auto-sch-repeats').value) || 1);
-  const rounds = roundRobinRounds(DB.teams.map(t => t.id));
+  const rounds = roundRobinRounds(schedulableTeams().map(t => t.id));
   const roundsPerPass = rounds.length;
   const gamesPerPass = rounds.reduce((s, r) => s + r.length, 0);
   const totalRounds = roundsPerPass * repeats;
@@ -1612,8 +1639,8 @@ function updateAutoSchedulePreview() {
 }
 
 function generateAutoSchedule() {
-  const n = DB.teams.length;
-  if (n < 2) { toast('צריך לפחות 2 קבוצות כדי ליצור תוכנית'); return; }
+  const n = schedulableTeams().length;
+  if (n < 2) { toast('צריך לפחות 2 קבוצות המשתתפות במשחק הקבוצתי כדי ליצור תוכנית'); return; }
   const start = document.getElementById('auto-sch-start-date').value;
   const interval = Math.max(1, parseInt(document.getElementById('auto-sch-interval').value) || 7);
   const repeats = Math.max(1, parseInt(document.getElementById('auto-sch-repeats').value) || 1);
@@ -1635,7 +1662,7 @@ function generateAutoSchedule() {
     existingUpcoming.forEach(s => fbDel('schedule', s.id));
     DB.schedule = DB.schedule.filter(s => s.status === 'completed');
 
-    const rounds = roundRobinRounds(DB.teams.map(t => t.id));
+    const rounds = roundRobinRounds(schedulableTeams().map(t => t.id));
     const newSchedule = [];
     let globalRound = 0;
     for (let pass = 0; pass < repeats; pass++) {
@@ -1819,7 +1846,7 @@ function gameTotal(g, side) {
 }
 
 function renderResults() {
-  const list = [...DB.results].sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+  const list = DB.results.filter(r => !r.isPractice).sort((a, b) => (b.date || '').localeCompare(a.date || ''));
   document.getElementById('results-tbody').innerHTML = list.map(r => {
     const aPins = (r.games || []).reduce((s, g) => s + gameTotal(g, 'A'), 0);
     const bPins = (r.games || []).reduce((s, g) => s + gameTotal(g, 'B'), 0);
@@ -1890,6 +1917,100 @@ function deleteResult(id) {
     renderResults();
     renderSchedule();
     toast('🗑️ התוצאה נמחקה');
+  });
+}
+
+// ─── PRACTICE SCORES ───────────────────────────────────────────
+// For players on a team excluded from the team competition (currently only
+// פייסרים) — there's no scheduled opponent, so games are entered here
+// instead of through the normal match-entry flow. Saved as an ordinary
+// result (isPractice: true, teamBId: null) so playerStatsFor/personal
+// standings pick the scores up for free; every team-oriented computation
+// explicitly filters isPractice results out.
+function practiceEligiblePlayers() {
+  return DB.players.filter(p => p.teamId && teamHasUnlimitedRoster(p.teamId));
+}
+
+function renderPracticePage() {
+  document.getElementById('practice-form-card').innerHTML = buildPracticeFormHtml();
+  const list = DB.results.filter(r => r.isPractice).sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+  document.getElementById('practice-tbody').innerHTML = list.map(r => {
+    const names = Object.keys((r.games && r.games[0] && r.games[0].playerScores) || {})
+      .map(pid => (DB.players.find(p => p.id === pid) || {}).name || '—').join(', ');
+    return `<tr>
+      <td>${fmtDate(r.date)}</td>
+      <td>${names || '—'}</td>
+      <td style="white-space:nowrap;"><button class="btn btn-danger btn-sm" onclick="deletePracticeEntry('${r.id}')">מחק</button></td>
+    </tr>`;
+  }).join('') || '<tr><td colspan="3" style="text-align:center; color:#94A3B8;">אין משחקי תרגול עדיין</td></tr>';
+}
+
+function buildPracticeFormHtml(gamesCount) {
+  const players = practiceEligiblePlayers();
+  const n = gamesCount || DB.settings.gamesPerMatch || 3;
+  const header = Array.from({ length: n }, (_, i) => `<th style="text-align:center;">משחק ${i + 1}</th>`).join('');
+  const rows = players.map(p => {
+    const cells = Array.from({ length: n }, (_, i) =>
+      `<td><input type="number" class="score-input" min="0" max="300" id="prac_${p.id}_${i}"></td>`
+    ).join('');
+    return `<tr><td>${p.name}</td>${cells}</tr>`;
+  }).join('') || `<tr><td colspan="${n + 1}" style="text-align:center; color:#94A3B8;">אין שחקנים ללא קבוצה מתחרה</td></tr>`;
+  return `
+    <h2 style="margin-bottom:14px;">משחק תרגול חדש</h2>
+    <div class="form-row">
+      <div class="form-group"><label>תאריך</label><input type="date" id="prac-date" value="${todayStr()}"></div>
+      <div class="form-group"><label>מספר משחקים</label><input type="number" id="prac-games-count" min="1" max="10" value="${n}" onchange="renderPracticeForm(this.value)"></div>
+    </div>
+    <p style="font-size:12px; color:#94A3B8; margin-bottom:10px;">מלא ניקוד רק לשחקנים שאכן שיחקו באותו ערב — שורה ריקה לגמרי לא תישמר.</p>
+    <div class="table-wrap"><table>
+      <thead><tr><th>שחקן</th>${header}</tr></thead>
+      <tbody>${rows}</tbody>
+    </table></div>
+    <div style="display:flex; justify-content:flex-end; margin-top:14px;">
+      <button class="btn btn-primary" onclick="savePracticeEntry()">&#x1F4BE; שמור</button>
+    </div>`;
+}
+
+function renderPracticeForm(gamesCount) {
+  document.getElementById('practice-form-card').innerHTML = buildPracticeFormHtml(Math.max(1, parseInt(gamesCount) || 3));
+}
+
+async function savePracticeEntry() {
+  const date = document.getElementById('prac-date').value;
+  if (!date) { toast('נא לבחור תאריך'); return; }
+  const n = Math.max(1, parseInt(document.getElementById('prac-games-count').value) || 3);
+  const players = practiceEligiblePlayers();
+  const games = Array.from({ length: n }, (_, i) => ({ gameNum: i + 1, playerScores: {} }));
+  let playedTeamId = null;
+  players.forEach(p => {
+    const hasAny = Array.from({ length: n }, (_, i) => document.getElementById(`prac_${p.id}_${i}`).value.trim() !== '').some(Boolean);
+    if (!hasAny) return; // skip players who didn't play this session
+    if (!playedTeamId) playedTeamId = p.teamId;
+    for (let i = 0; i < n; i++) {
+      games[i].playerScores[p.id] = clampScore(document.getElementById(`prac_${p.id}_${i}`).value);
+    }
+  });
+  if (!playedTeamId) { toast('נא להזין ניקוד לפחות לשחקן אחד'); return; }
+  const id = uid('prac');
+  const data = { id, date, isPractice: true, teamAId: playedTeamId, teamBId: null, games, createdAt: new Date().toISOString() };
+  DB.results.push(data);
+  dbSave();
+  renderPracticePage();
+  toast('✅ משחק התרגול נשמר');
+  try {
+    await fbSet('results', id, data);
+  } catch(e) {
+    toast('⚠️ נשמר מקומית אך לא בענן — לך להגדרות ולחץ "העלה נתונים מקומיים לענן"');
+  }
+}
+
+function deletePracticeEntry(id) {
+  confirmAction('מחיקת משחק תרגול', 'למחוק את משחק התרגול? הממוצע האישי של השחקנים יתעדכן בהתאם.', () => {
+    DB.results = DB.results.filter(x => x.id !== id);
+    dbSave();
+    fbDel('results', id);
+    renderPracticePage();
+    toast('🗑️ משחק התרגול נמחק');
   });
 }
 
@@ -2434,12 +2555,12 @@ function computeRoundRobinTeamPoints() {
   const gw = DB.settings.pointsPerGameWin ?? 1;
   const sw = DB.settings.pointsPerSeriesWin ?? 2;
   const byDate = {};
-  DB.results.forEach(r => {
+  DB.results.filter(r => !r.isPractice).forEach(r => {
     if (!byDate[r.date]) byDate[r.date] = [];
     byDate[r.date].push(r);
   });
   const teamPoints = {};
-  DB.teams.forEach(t => { teamPoints[t.id] = 0; });
+  schedulableTeams().forEach(t => { teamPoints[t.id] = 0; });
 
   Object.values(byDate).forEach(roundResults => {
     const roundTeams = {};
@@ -2475,8 +2596,8 @@ function computeRoundRobinTeamPoints() {
 function computeTeamStandings() {
   const altPoints = DB.settings.scoringMethod === 'roundRobin' ? computeRoundRobinTeamPoints() : null;
   const map = {};
-  DB.teams.forEach(t => { map[t.id] = { team: t, played: 0, points: 0, pins: 0 }; });
-  DB.results.forEach(r => {
+  schedulableTeams().forEach(t => { map[t.id] = { team: t, played: 0, points: 0, pins: 0 }; });
+  DB.results.filter(r => !r.isPractice).forEach(r => {
     const a = map[r.teamAId], b = map[r.teamBId];
     const aPins = (r.games || []).reduce((s, g) => s + gameTotal(g, 'A'), 0);
     const bPins = (r.games || []).reduce((s, g) => s + gameTotal(g, 'B'), 0);
