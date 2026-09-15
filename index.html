@@ -283,12 +283,15 @@ function renderContent(DB) {
   if (altPoints) { Object.keys(teamMap).forEach(tid => { teamMap[tid].points = altPoints[tid] || 0; }); }
   const teamStandings = Object.values(teamMap).sort((x, y) => y.points - x.points || y.pins - x.pins);
 
-  // Player standings
+  // Player standings — a player marked absent gets an auto-filled score so
+  // their team's total isn't hurt, but it's not a real game of theirs, so
+  // it's skipped here (and in every other personal-stat list below).
   const playerStats = {};
   DB.players.forEach(p => { playerStats[p.id] = { player: p, games: 0, total: 0, high: 0 }; });
   DB.results.forEach(r => (r.games || []).forEach(g => {
     Object.entries(g.playerScores || {}).forEach(([pid, score]) => {
       if (!playerStats[pid] || score == null) return;
+      if (r.absentPlayerIds && r.absentPlayerIds.includes(pid)) return;
       playerStats[pid].games++;
       playerStats[pid].total += score;
       if (score > playerStats[pid].high) playerStats[pid].high = score;
@@ -312,8 +315,9 @@ function renderContent(DB) {
   const roundEntries = [];
   if (latestDate) {
     leagueResults.filter(r => r.date === latestDate).forEach(r => {
+      const absent = r.absentPlayerIds || [];
       const pids = new Set();
-      (r.games || []).forEach(g => Object.keys(g.playerScores || {}).forEach(pid => pids.add(pid)));
+      (r.games || []).forEach(g => Object.keys(g.playerScores || {}).forEach(pid => { if (!absent.includes(pid)) pids.add(pid); }));
       pids.forEach(pid => {
         const total = (r.games || []).reduce((s, g) => s + ((g.playerScores && g.playerScores[pid]) || 0), 0);
         roundEntries.push({ pid, total });
@@ -323,20 +327,21 @@ function renderContent(DB) {
   const roundAllStars = roundEntries.sort((a, b) => b.total - a.total).slice(0, 5);
   const lastRoundResults = latestDate ? leagueResults.filter(r => r.date === latestDate) : [];
 
-  // All-time single-game high scores (top 3)
+  // All-time single-game high scores (top 3) — absent-filled scores excluded
   const singleGameEntries = [];
   DB.results.forEach(r => (r.games || []).forEach(g => {
     Object.entries(g.playerScores || {}).forEach(([pid, score]) => {
-      if (score != null) singleGameEntries.push({ pid, score, date: r.date });
+      if (score != null && !(r.absentPlayerIds && r.absentPlayerIds.includes(pid))) singleGameEntries.push({ pid, score, date: r.date });
     });
   }));
   const topSingleGames = singleGameEntries.sort((a, b) => b.score - a.score).slice(0, 3);
 
-  // All-time series high (top 3)
+  // All-time series high (top 3) — absent-filled scores excluded
   const seriesEntries = [];
   DB.results.forEach(r => {
+    const absent = r.absentPlayerIds || [];
     const pids = new Set();
-    (r.games || []).forEach(g => Object.keys(g.playerScores || {}).forEach(pid => pids.add(pid)));
+    (r.games || []).forEach(g => Object.keys(g.playerScores || {}).forEach(pid => { if (!absent.includes(pid)) pids.add(pid); }));
     pids.forEach(pid => {
       const total = (r.games || []).reduce((s, g) => s + ((g.playerScores && g.playerScores[pid]) || 0), 0);
       seriesEntries.push({ pid, total, date: r.date, gamesCount: (r.games || []).length });

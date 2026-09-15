@@ -1250,10 +1250,13 @@ function populatePlayerTeamSelect(excludePlayerId) {
 
 function playerStatsFor(playerId) {
   let games = 0, total = 0, high = 0;
-  DB.results.forEach(r => (r.games || []).forEach(g => {
-    const s = g.playerScores ? g.playerScores[playerId] : undefined;
-    if (s !== undefined && s !== null) { games++; total += s; if (s > high) high = s; }
-  }));
+  DB.results.forEach(r => {
+    if (r.absentPlayerIds && r.absentPlayerIds.includes(playerId)) return; // auto-filled, not a real game
+    (r.games || []).forEach(g => {
+      const s = g.playerScores ? g.playerScores[playerId] : undefined;
+      if (s !== undefined && s !== null) { games++; total += s; if (s > high) high = s; }
+    });
+  });
   return { games, avg: games ? total / games : 0, high };
 }
 
@@ -1925,7 +1928,8 @@ function openResultDetail(id) {
       const total = (r.games || []).reduce((s, g) => s + ((g.playerScores && g.playerScores[p.id]) || 0), 0);
       const hLabel = r.handicapEnabled ? ` <span style="color:#94A3B8; font-size:12px;">(הנד׳ ${hcp[p.id] ?? 0})</span>` : '';
       const notCountedLabel = (unlimited && !counted.has(p.id)) ? ` <span style="color:#F59E0B; font-size:12px;">(לא נספר בסה"כ הקבוצתי)</span>` : '';
-      return `<tr><td>${p.name}${hLabel}${notCountedLabel}</td>${cells}<td style="font-weight:800;">${total}</td></tr>`;
+      const absentLabel = (r.absentPlayerIds && r.absentPlayerIds.includes(p.id)) ? ` <span style="color:#94A3B8; font-size:12px;">(נעדר — לא נספר לממוצע האישי)</span>` : '';
+      return `<tr><td>${p.name}${hLabel}${notCountedLabel}${absentLabel}</td>${cells}<td style="font-weight:800;">${total}</td></tr>`;
     }).join('');
   }
   function totalsFooter(side) {
@@ -2123,7 +2127,7 @@ function buildEditResultRoster(r) {
       }).join('');
       const hcpVal = (r.playerHandicaps && r.playerHandicaps[p.id]) || 0;
       const hcpCell = hcpOn ? `<td style="text-align:center; color:#0369A1;">${hcpVal}</td>` : '';
-      const wasForfeit = side === 'a' ? r.teamAForfeit : r.teamBForfeit;
+      const wasForfeit = (side === 'a' ? r.teamAForfeit : r.teamBForfeit) || (r.absentPlayerIds && r.absentPlayerIds.includes(p.id));
       const absentCell = `<td style="text-align:center;"><input type="checkbox" id="absedit_${side}_${p.id}" ${wasForfeit ? 'checked' : ''} title="נעדר — ימולא אוטומטית לפי הממוצע האישי פחות 10 נקודות" onchange="markEditPlayerAbsent('${side}','${p.id}', this.checked)"></td>`;
       const nameCell = lineupOn ? `${lineupControlsHtml(tbodyId, p.id, idx)}${p.name}` : p.name;
       return `<tr data-player-id="${p.id}"><td>${nameCell}</td>${hcpCell}${cells}${absentCell}</tr>`;
@@ -2251,11 +2255,13 @@ async function saveEditResult() {
   const teamBForfeit = teamFullyAbsent(bPlayers, p => `absedit_b_${p.id}`);
   if (teamAForfeit) aPoints = 0;
   if (teamBForfeit) bPoints = 0;
+  const isAbsentEdit = (side, p) => !!document.getElementById(`absedit_${side}_${p.id}`)?.checked;
   r.games = games;
   r.teamAPoints = aPoints;
   r.teamBPoints = bPoints;
   r.teamAForfeit = teamAForfeit;
   r.teamBForfeit = teamBForfeit;
+  r.absentPlayerIds = [...aPlayers.filter(p => isAbsentEdit('a', p)), ...bPlayers.filter(p => isAbsentEdit('b', p))].map(p => p.id);
   r.updatedAt = new Date().toISOString();
   dbSave();
   closeModal('edit-result-modal');
@@ -2580,12 +2586,18 @@ async function saveMatchEntry(scheduleId) {
   const teamBForfeit = teamFullyAbsent(bPlayers, p => `abs_${s.id}_b_${p.id}`);
   if (teamAForfeit) aPoints = 0;
   if (teamBForfeit) bPoints = 0;
+  // Absent players' auto-filled scores stay in team totals (that's the
+  // whole point of the fill) but shouldn't count as a real game toward
+  // their own personal average/records — playerStatsFor and the public
+  // page's personal-stat loops skip any player id listed here.
+  const absentPlayerIds = [...aPlayers.filter(p => isAbsent('a', p)), ...bPlayers.filter(p => isAbsent('b', p))].map(p => p.id);
   const id = uid('res');
   const data = {
     id, date: s.date, scheduleId: s.id, teamAId: s.teamAId, teamBId: s.teamBId, games,
     teamAPoints: aPoints, teamBPoints: bPoints, teamAForfeit, teamBForfeit,
     handicapEnabled: !!DB.settings.handicapEnabled, playerHandicaps,
     teamACountedIds: [...aCounted], teamBCountedIds: [...bCounted],
+    absentPlayerIds,
     teamAOrder, teamBOrder,
     createdAt: new Date().toISOString()
   };
