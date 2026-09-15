@@ -281,7 +281,7 @@ input[type="number"].score-input { text-align: center; padding: 8px 4px; font-we
           <select id="players-filter-team" onchange="renderPlayers()"><option value="">כל הקבוצות</option></select>
         </div>
         <div class="table-wrap"><table>
-          <thead><tr><th>שם</th><th>מגדר</th><th>קבוצה</th><th>ממוצע</th><th>הנדיקפ</th><th></th></tr></thead>
+          <thead><tr><th>שם</th><th>מגדר</th><th>קבוצה</th><th>משחקים</th><th>ממוצע</th><th>הנדיקפ</th><th></th></tr></thead>
           <tbody id="players-tbody"></tbody>
         </table></div>
       </div>
@@ -545,6 +545,23 @@ input[type="number"].score-input { text-align: center; padding: 8px 4px; font-we
     <div class="modal-footer">
       <button class="btn btn-secondary" onclick="closeModal('player-modal')">ביטול</button>
       <button class="btn btn-primary" onclick="savePlayer()">שמור</button>
+    </div>
+  </div>
+</div>
+
+<!-- PRESENCE FIX MODAL -->
+<div id="presence-fix-modal" class="modal-overlay hidden">
+  <div class="modal" style="width:600px;">
+    <h2 id="presence-fix-title">&#x1F3AF; תיקון נוכחות</h2>
+    <p style="font-size:13px;color:#64748B;margin-bottom:14px;">כל התוצאות שבהן לשחקן יש ניקוד רשום. סמן "נעדר" עבור משחק שבו הוא סומן נעדר בפועל (ניקוד ממולא אוטומטית) — זה לא ישנה שום ציון, רק יקבע אם המשחק נספר לממוצע האישי שלו.</p>
+    <input type="hidden" id="presence-fix-player-id">
+    <div class="table-wrap"><table>
+      <thead><tr><th>תאריך</th><th>משחק</th><th>סה"כ סדרה</th><th>נעדר</th></tr></thead>
+      <tbody id="presence-fix-tbody"></tbody>
+    </table></div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" onclick="closeModal('presence-fix-modal')">ביטול</button>
+      <button class="btn btn-primary" onclick="savePresenceFix()">שמור</button>
     </div>
   </div>
 </div>
@@ -1335,10 +1352,12 @@ function renderPlayers() {
         ? `<span class="color-dot" style="background:${teamColor(p.teamId)}"></span>${teamName(p.teamId)}`
         : `<span style="cursor:pointer;" onclick="startQuickTeamAssign('${p.id}')" title="לחץ כדי לשייך לקבוצה"><span class="color-dot" style="background:#94A3B8;"></span>ללא קבוצה</span>`
       }</td>
+      <td>${st.games}</td>
       <td>${st.games ? st.avg.toFixed(2) : (p.manualAverage != null ? p.manualAverage.toFixed(2) + ' <span style="color:#94A3B8; font-size:12px;">(ידני)</span>' : '—')}</td>
       <td>${DB.settings.handicapEnabled ? computeHandicap(p.id) + (!st.games && p.manualHandicap != null ? ' <span style="color:#94A3B8; font-size:12px;">(ידני)</span>' : '') : '—'}</td>
       <td style="white-space:nowrap;">
         <button class="btn btn-secondary btn-sm" onclick="openPlayerModal('${p.id}')">ערוך</button>
+        <button class="btn btn-secondary btn-sm" onclick="openPresenceFixModal('${p.id}')" title="לתקן רטרואקטיבית אילו תוצאות נספרות לממוצע האישי שלו">תיקון נוכחות</button>
         <button class="btn btn-danger btn-sm" onclick="deletePlayer('${p.id}')">מחק</button>
       </td>
     </tr>`;
@@ -1353,12 +1372,66 @@ function renderPlayers() {
     <td><input type="text" id="new-player-name" placeholder="שם שחקן חדש" onkeydown="if(event.key==='Enter') saveInlinePlayer()"></td>
     <td><select id="new-player-gender"><option value="גבר">גבר</option><option value="אישה">אישה</option><option value="">לא צוין</option></select></td>
     <td><select id="new-player-team"><option value="">ללא קבוצה</option>${teamOpts}</select></td>
+    <td>—</td>
     <td><input type="number" id="new-player-avg" placeholder="ידני (לא חובה)" min="0" max="300" step="0.01" onkeydown="if(event.key==='Enter') saveInlinePlayer()"></td>
     <td><input type="number" id="new-player-handicap" placeholder="אוטומטי" min="0" step="0.01" onkeydown="if(event.key==='Enter') saveInlinePlayer()"></td>
     <td><button class="btn btn-primary btn-sm" onclick="saveInlinePlayer()">&#x1F4BE; שמירה</button></td>
   </tr>`;
 
   document.getElementById('players-tbody').innerHTML = rows + newRow;
+}
+
+// Retroactive fix for results saved before absentPlayerIds existed (or
+// where the checkbox simply wasn't ticked correctly at the time) — lets an
+// admin mark, after the fact, which of a player's already-saved results
+// shouldn't count toward their personal average. Only touches
+// absentPlayerIds; scores/team totals/points are untouched.
+function openPresenceFixModal(playerId) {
+  const p = DB.players.find(x => x.id === playerId);
+  if (!p) return;
+  document.getElementById('presence-fix-player-id').value = playerId;
+  document.getElementById('presence-fix-title').textContent = `\u{1F3AF} תיקון נוכחות — ${p.name}`;
+  const results = DB.results
+    .filter(r => (r.games || []).some(g => g.playerScores && Object.prototype.hasOwnProperty.call(g.playerScores, playerId)))
+    .sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+  document.getElementById('presence-fix-tbody').innerHTML = results.map(r => {
+    const total = (r.games || []).reduce((s, g) => s + ((g.playerScores && g.playerScores[playerId]) || 0), 0);
+    const label = r.isPractice ? 'ניקוד אישי' : `${teamName(r.teamAId)} נגד ${teamName(r.teamBId)}`;
+    const checked = r.absentPlayerIds && r.absentPlayerIds.includes(playerId);
+    return `<tr>
+      <td>${fmtDate(r.date)}</td>
+      <td>${label}</td>
+      <td>${total}</td>
+      <td style="text-align:center;"><input type="checkbox" data-result-id="${r.id}" ${checked ? 'checked' : ''}></td>
+    </tr>`;
+  }).join('') || `<tr><td colspan="4" style="text-align:center; color:#94A3B8;">לא נמצאו תוצאות עם ניקוד עבור שחקן זה</td></tr>`;
+  openModalEl('presence-fix-modal');
+}
+
+async function savePresenceFix() {
+  const playerId = document.getElementById('presence-fix-player-id').value;
+  const checkboxes = document.querySelectorAll('#presence-fix-tbody input[data-result-id]');
+  const changed = [];
+  checkboxes.forEach(cb => {
+    const r = DB.results.find(x => x.id === cb.dataset.resultId);
+    if (!r) return;
+    const wasAbsent = !!(r.absentPlayerIds && r.absentPlayerIds.includes(playerId));
+    if (cb.checked === wasAbsent) return;
+    const ids = new Set(r.absentPlayerIds || []);
+    if (cb.checked) ids.add(playerId); else ids.delete(playerId);
+    r.absentPlayerIds = [...ids];
+    changed.push(r);
+  });
+  if (!changed.length) { closeModal('presence-fix-modal'); return; }
+  dbSave();
+  closeModal('presence-fix-modal');
+  renderPlayers();
+  toast('✅ הנוכחות עודכנה');
+  try {
+    await Promise.all(changed.map(r => fbSet('results', r.id, r)));
+  } catch(e) {
+    toast('⚠️ עודכן מקומית אך לא בענן — לך להגדרות ולחץ "העלה נתונים מקומיים לענן"');
+  }
 }
 
 // Clicking the gray "ללא קבוצה" dot swaps that cell for a one-off <select>
