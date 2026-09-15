@@ -202,6 +202,46 @@ function computeRoundRobinTeamPoints(DB) {
   return teamPoints;
 }
 
+// Ranks teams purely by total (handicap-inclusive) pins scored that round —
+// no per-opponent game/series comparison, no high-score bonus. Mirrors
+// admin.html's computePinsLadderTeamPoints(); see its comment for the tie
+// rule (tied teams share the average of the ladder values for the ranks
+// they collectively occupy).
+function computePinsLadderTeamPoints(DB) {
+  const top = DB.settings.pinsLadderTop ?? 18;
+  const step = DB.settings.pinsLadderStep ?? 2;
+  const byDate = {};
+  DB.results.filter(r => !r.isPractice).forEach(r => {
+    if (!byDate[r.date]) byDate[r.date] = [];
+    byDate[r.date].push(r);
+  });
+  const teamPoints = {};
+  schedulableTeams(DB).forEach(t => { teamPoints[t.id] = 0; });
+
+  Object.values(byDate).forEach(roundResults => {
+    const roundPins = {};
+    roundResults.forEach(r => {
+      if (!r.teamAForfeit) roundPins[r.teamAId] = (r.games || []).reduce((s, g) => s + gameTotal(g, 'A'), 0);
+      if (r.teamBId && !r.teamBForfeit) roundPins[r.teamBId] = (r.games || []).reduce((s, g) => s + gameTotal(g, 'B'), 0);
+    });
+    const ranked = Object.entries(roundPins).sort((a, b) => b[1] - a[1]);
+    let i = 0;
+    while (i < ranked.length) {
+      let j = i;
+      while (j + 1 < ranked.length && ranked[j + 1][1] === ranked[i][1]) j++;
+      let sum = 0;
+      for (let k = i; k <= j; k++) sum += Math.max(0, top - step * k);
+      const avg = sum / (j - i + 1);
+      for (let k = i; k <= j; k++) {
+        const teamId = ranked[k][0];
+        teamPoints[teamId] = (teamPoints[teamId] || 0) + avg;
+      }
+      i = j + 1;
+    }
+  });
+  return teamPoints;
+}
+
 // Handicap for the public roster view — mirrors admin.html's
 // computeHandicap: manual handicap/average (for players without game
 // history yet) take priority over the auto formula, which otherwise
@@ -229,7 +269,8 @@ function renderContent(DB) {
   const el = document.getElementById('content');
 
   // Team standings
-  const altPoints = DB.settings && DB.settings.scoringMethod === 'roundRobin' ? computeRoundRobinTeamPoints(DB) : null;
+  const altPoints = DB.settings && DB.settings.scoringMethod === 'roundRobin' ? computeRoundRobinTeamPoints(DB)
+    : DB.settings && DB.settings.scoringMethod === 'pinsLadder' ? computePinsLadderTeamPoints(DB) : null;
   const teamMap = {};
   schedulableTeams(DB).forEach(t => { teamMap[t.id] = { team: t, played: 0, points: 0, pins: 0 }; });
   DB.results.filter(r => !r.isPractice).forEach(r => {

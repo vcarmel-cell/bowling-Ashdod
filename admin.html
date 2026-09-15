@@ -428,8 +428,16 @@ input[type="number"].score-input { text-align: center; padding: 8px 4px; font-we
             <input type="radio" name="scoring-method" id="set-scoring-personal" value="personalImpact" style="width:auto; margin-top:3px;">
             <span><strong>קבוצה נגד קבוצה עם השפעה אישית</strong> — נקודות על סה"כ פינים בדיוק כמו ב"קבוצה נגד קבוצה" (מול היריבה המתוזמנת בלבד), ובנוסף תחרות אישית: לפני הזנת התוצאות כל קבוצה קובעת סדר שחקנים (בעזרת החצים ליד שם השחקן במסך "הזנת תוצאות" או "עריכת תוצאה"), ושחקן ראשון משחק מול הראשון של הקבוצה היריבה במסלול המקביל, שני מול שני וכן הלאה. על כל משחק שבו שחקן ניצח את מקבילו, קבוצתו מקבלת "נקודות על ניצחון אישי" (מההגדרה למטה) — למשל עד 3 נקודות נוספות לשחקן בברירת המחדל של 3 משחקים. ההשוואה כוללת הנדיקפ אישי כשההנדיקפ מופעל.</span>
           </label>
+          <label style="display:flex; align-items:flex-start; gap:8px; font-weight:400; margin-top:10px;">
+            <input type="radio" name="scoring-method" id="set-scoring-pinsladder" value="pinsLadder" style="width:auto; margin-top:3px;">
+            <span><strong>דירוג לפי סך פינים במחזור</strong> — בכל מחזור מדרגים את הקבוצות לפי סך הפינים שלהן באותו מחזור בלבד (מול כל שאר הקבוצות ששיחקו אז, לא רק מול היריבה המתוזמנת) — בלי השוואה של משחק-משחק ובלי בונוס ציון גבוה. המקום הראשון מקבל את "ניקוד המקום הראשון" (מההגדרה למטה), וכל מקום אחריו מקבל פחות לפי "ירידה לכל מקום", עד מינימום 0. קבוצות שסיימו בתיקו פינים מקבלות את הממוצע בין הניקוד של המקומות שהן חולקות.</span>
+          </label>
         </div>
         <div class="form-group" style="max-width:280px;margin-bottom:14px;"><label>נקודות על ניצחון אישי במשחק בודד</label><input type="number" id="set-points-personal-game-win" min="0" step="0.5"></div>
+        <div class="form-row" style="max-width:400px;margin-bottom:14px;">
+          <div class="form-group"><label>ניקוד המקום הראשון (דירוג לפי פינים)</label><input type="number" id="set-pins-ladder-top" min="0" step="0.5"></div>
+          <div class="form-group"><label>ירידה לכל מקום</label><input type="number" id="set-pins-ladder-step" min="0" step="0.5"></div>
+        </div>
         <p style="font-size:12px;color:#94A3B8;margin-bottom:14px;">משפיע רק על טבלת הדירוג הקבוצתי (בממשק הניהול ובאתר הציבורי). היסטוריית התוצאות והפרטים של כל משחק בודד ממשיכים להיות מוצגים לפי היריב המתוזמן, ללא שינוי.</p>
         <button class="btn btn-primary" onclick="saveScoringMethod()">שמור שיטת ניקוד</button>
       </div>
@@ -856,7 +864,7 @@ function reopenSetupScreen() {
 }
 
 // ─── DATA ────────────────────────────────────────────────────
-const DEFAULT_SETTINGS = { gamesPerMatch: 3, pointsPerGameWin: 1, pointsPerSeriesWin: 2, pointsPerPersonalGameWin: 1, pin: '1234', handicapEnabled: true, handicapBasis: 200, handicapPercent: 80, leagueName: 'ליגת באולינג', logoData: null, laneStart: null, laneEnd: null, scoringMethod: 'standard' };
+const DEFAULT_SETTINGS = { gamesPerMatch: 3, pointsPerGameWin: 1, pointsPerSeriesWin: 2, pointsPerPersonalGameWin: 1, pinsLadderTop: 18, pinsLadderStep: 2, pin: '1234', handicapEnabled: true, handicapBasis: 200, handicapPercent: 80, leagueName: 'ליגת באולינג', logoData: null, laneStart: null, laneEnd: null, scoringMethod: 'standard' };
 
 // Lanes are offered as adjacent pairs (e.g. "3-4"), matching how bowling
 // centers actually assign a match to a pair of lanes. A leftover single lane
@@ -2651,8 +2659,51 @@ function computeRoundRobinTeamPoints() {
   return teamPoints;
 }
 
+// Ranks teams purely by total (handicap-inclusive) pins scored that round —
+// no per-opponent game/series comparison, no high-score bonus. 1st place
+// gets pinsLadderTop points; each place after drops by pinsLadderStep,
+// floored at 0. Teams tied on pins share the average of the ladder values
+// for the ranks they collectively occupy (same "split the difference"
+// convention ties already use elsewhere — e.g. an equal game/series in
+// computeMatchPoints).
+function computePinsLadderTeamPoints() {
+  const top = DB.settings.pinsLadderTop ?? 18;
+  const step = DB.settings.pinsLadderStep ?? 2;
+  const byDate = {};
+  DB.results.filter(r => !r.isPractice).forEach(r => {
+    if (!byDate[r.date]) byDate[r.date] = [];
+    byDate[r.date].push(r);
+  });
+  const teamPoints = {};
+  schedulableTeams().forEach(t => { teamPoints[t.id] = 0; });
+
+  Object.values(byDate).forEach(roundResults => {
+    const roundPins = {}; // teamId -> pins, forfeiting teams excluded (stay at 0)
+    roundResults.forEach(r => {
+      if (!r.teamAForfeit) roundPins[r.teamAId] = (r.games || []).reduce((s, g) => s + gameTotal(g, 'A'), 0);
+      if (r.teamBId && !r.teamBForfeit) roundPins[r.teamBId] = (r.games || []).reduce((s, g) => s + gameTotal(g, 'B'), 0);
+    });
+    const ranked = Object.entries(roundPins).sort((a, b) => b[1] - a[1]);
+    let i = 0;
+    while (i < ranked.length) {
+      let j = i;
+      while (j + 1 < ranked.length && ranked[j + 1][1] === ranked[i][1]) j++;
+      let sum = 0;
+      for (let k = i; k <= j; k++) sum += Math.max(0, top - step * k);
+      const avg = sum / (j - i + 1);
+      for (let k = i; k <= j; k++) {
+        const teamId = ranked[k][0];
+        teamPoints[teamId] = (teamPoints[teamId] || 0) + avg;
+      }
+      i = j + 1;
+    }
+  });
+  return teamPoints;
+}
+
 function computeTeamStandings() {
-  const altPoints = DB.settings.scoringMethod === 'roundRobin' ? computeRoundRobinTeamPoints() : null;
+  const altPoints = DB.settings.scoringMethod === 'roundRobin' ? computeRoundRobinTeamPoints()
+    : DB.settings.scoringMethod === 'pinsLadder' ? computePinsLadderTeamPoints() : null;
   const map = {};
   schedulableTeams().forEach(t => { map[t.id] = { team: t, played: 0, points: 0, pins: 0 }; });
   DB.results.filter(r => !r.isPractice).forEach(r => {
@@ -2752,17 +2803,23 @@ function renderSettings() {
   document.getElementById('set-lane-start').value = DB.settings.laneStart ?? '';
   document.getElementById('set-lane-end').value = DB.settings.laneEnd ?? '';
   updateLanePreview();
-  const method = ['roundRobin', 'personalImpact'].includes(DB.settings.scoringMethod) ? DB.settings.scoringMethod : 'standard';
+  const method = ['roundRobin', 'personalImpact', 'pinsLadder'].includes(DB.settings.scoringMethod) ? DB.settings.scoringMethod : 'standard';
   document.getElementById('set-scoring-standard').checked = method === 'standard';
   document.getElementById('set-scoring-roundrobin').checked = method === 'roundRobin';
   document.getElementById('set-scoring-personal').checked = method === 'personalImpact';
+  document.getElementById('set-scoring-pinsladder').checked = method === 'pinsLadder';
   document.getElementById('set-points-personal-game-win').value = DB.settings.pointsPerPersonalGameWin ?? 1;
+  document.getElementById('set-pins-ladder-top').value = DB.settings.pinsLadderTop ?? 18;
+  document.getElementById('set-pins-ladder-step').value = DB.settings.pinsLadderStep ?? 2;
 }
 
 function saveScoringMethod() {
   DB.settings.scoringMethod = document.getElementById('set-scoring-personal').checked ? 'personalImpact'
-    : document.getElementById('set-scoring-roundrobin').checked ? 'roundRobin' : 'standard';
+    : document.getElementById('set-scoring-roundrobin').checked ? 'roundRobin'
+    : document.getElementById('set-scoring-pinsladder').checked ? 'pinsLadder' : 'standard';
   DB.settings.pointsPerPersonalGameWin = parseFloat(document.getElementById('set-points-personal-game-win').value) || 0;
+  DB.settings.pinsLadderTop = parseFloat(document.getElementById('set-pins-ladder-top').value) || 0;
+  DB.settings.pinsLadderStep = parseFloat(document.getElementById('set-pins-ladder-step').value) || 0;
   dbSave();
   fbSet('settings', 'config', DB.settings);
   toast('✅ שיטת הניקוד נשמרה');
