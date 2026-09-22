@@ -463,6 +463,8 @@ input[type="number"].score-input { text-align: center; padding: 8px 4px; font-we
         </div>
         <div id="lane-preview" style="font-size:13px; color:#0369A1; margin-bottom:14px;"></div>
         <button class="btn btn-primary" onclick="saveLaneSettings()">שמור מסלולים</button>
+        <button class="btn" style="margin-inline-start:8px;" onclick="rebalanceUpcomingLanes()">עדכן מסלולים למחזורים הבאים</button>
+        <p style="font-size:12px;color:#94A3B8;margin-top:8px;">מחשב מחדש את שיבוץ המסלולים למשחקים המתוזמנים (שטרם הוזנה עבורם תוצאה) לפי חלוקה הוגנת, בלי לשנות תאריכים, שעות או שיבוצי קבוצות.</p>
       </div>
     </div>
 
@@ -1681,6 +1683,61 @@ function roundRobinRounds(teamIds) {
   return rounds;
 }
 
+// Lane assignment for one round: pick a lane per game so that, across the
+// season, each team ends up on each lane roughly the same number of times
+// and never sits on the same lane more than twice in a row. Cost-based
+// greedy placement followed by pairwise-swap local search (both cheap —
+// a round only has a handful of games); laneCount/teamStreak carry state
+// from round to round so the whole season is balanced, not just one round.
+function laneAssignCost(team, lane, laneCount, teamStreak) {
+  const count = (laneCount[team] && laneCount[team][lane]) || 0;
+  let cost = count * 10; // prefer the lane this team has used least so far
+  const st = teamStreak[team];
+  if (st && st.lane === lane) {
+    cost += st.len >= 2 ? 100000 : 200; // hard-forbid a 3rd in a row, discourage a 2nd
+  }
+  return cost;
+}
+
+function assignLanesForRound(games, laneOptions, laneCount, teamStreak) {
+  const numGames = games.length;
+  if (numGames === 0 || laneOptions.length === 0) return games.map(() => '');
+  let pool = laneOptions.slice();
+  while (pool.length < numGames) pool = pool.concat(laneOptions); // more games than lanes: reuse lanes as evenly as possible
+
+  const costForGame = (game, lane) => laneAssignCost(game[0], lane, laneCount, teamStreak) + laneAssignCost(game[1], lane, laneCount, teamStreak);
+
+  const remaining = pool.slice();
+  const assignment = new Array(numGames).fill(null);
+  for (let g = 0; g < numGames; g++) {
+    let bestIdx = 0, bestCost = Infinity;
+    for (let k = 0; k < remaining.length; k++) {
+      const cost = costForGame(games[g], remaining[k]);
+      if (cost < bestCost) { bestCost = cost; bestIdx = k; }
+    }
+    assignment[g] = remaining[bestIdx];
+    remaining.splice(bestIdx, 1);
+  }
+
+  let improved = true, iter = 0;
+  while (improved && iter < 50) {
+    improved = false; iter++;
+    for (let i = 0; i < numGames; i++) {
+      for (let j = i + 1; j < numGames; j++) {
+        const li = assignment[i], lj = assignment[j];
+        if (li === lj) continue;
+        const before = costForGame(games[i], li) + costForGame(games[j], lj);
+        const after = costForGame(games[i], lj) + costForGame(games[j], li);
+        if (after < before) {
+          assignment[i] = lj; assignment[j] = li;
+          improved = true;
+        }
+      }
+    }
+  }
+  return assignment;
+}
+
 // Local-calendar-date helpers. toISOString() converts to UTC, which shifts
 // the date backward a day for any timezone ahead of UTC (e.g. Israel) once
 // local time is early enough in the morning — exactly the kind of off-by-one
@@ -1756,28 +1813,39 @@ function generateAutoSchedule() {
     : 'ליצור תוכנית משחקים חדשה?';
 
   confirmAction('יצירת תוכנית משחקים', msg, async () => {
-    // Lane pairs rotate by round (offset by globalRound) so a team doesn't
-    // keep landing on the same lanes match after match across the season.
+    // Lanes are assigned round by round (see assignLanesForRound) so that
+    // every team gets an even share of each lane across the season and
+    // never sits on the same lane more than twice in a row.
     const laneOptions = generateLanePairs(DB.settings.laneStart, DB.settings.laneEnd);
 
     existingUpcoming.forEach(s => fbDel('schedule', s.id));
     DB.schedule = DB.schedule.filter(s => s.status === 'completed');
 
-    const rounds = roundRobinRounds(schedulableTeams().map(t => t.id));
+    const teamsForSchedule = schedulableTeams();
+    const rounds = roundRobinRounds(teamsForSchedule.map(t => t.id));
     // A team excluded from the team competition still plays on the same
     // league nights — give it one opponent-less schedule row per round so
     // it shows on the schedule and gets its own print form, without ever
     // gating the round-entry flow (that only waits on two-team matches).
     const soloTeam = DB.teams.find(t => teamHasUnlimitedRoster(t.id));
+    const laneCount = {};
+    const teamStreak = {};
+    teamsForSchedule.forEach(t => { laneCount[t.id] = {}; teamStreak[t.id] = { lane: null, len: 0 }; });
     const newSchedule = [];
     let globalRound = 0;
     for (let pass = 0; pass < repeats; pass++) {
       rounds.forEach(pairs => {
         const date = addDays(start, globalRound * interval);
         const roundLabel = `מחזור ${globalRound + 1}`;
+        const laneAssignment = assignLanesForRound(pairs, laneOptions, laneCount, teamStreak);
         pairs.forEach(([teamA, teamB], gameIdx) => {
           const swap = pass % 2 === 1; // alternate home/away order on repeat passes
-          const lane = laneOptions.length ? laneOptions[(gameIdx + globalRound) % laneOptions.length] : '';
+          const lane = laneAssignment[gameIdx];
+          [teamA, teamB].forEach(teamId => {
+            laneCount[teamId][lane] = (laneCount[teamId][lane] || 0) + 1;
+            const st = teamStreak[teamId];
+            if (st.lane === lane) st.len += 1; else { st.lane = lane; st.len = 1; }
+          });
           const id = uid('sched');
           const data = {
             id, date, time, lane, round: roundLabel,
@@ -1808,6 +1876,82 @@ function generateAutoSchedule() {
       toast('⚠️ חלק מהמשחקים לא נשמרו בענן — לך להגדרות ולחץ "העלה נתונים מקומיים לענן"');
     }
   }, 'צור תוכנית');
+}
+
+// Re-runs the fair lane assignment over games that are already on the
+// schedule (dates/times/matchups untouched) instead of regenerating the
+// whole season — for leagues that had rounds planned under the old
+// round-robin lane rotation and want the existing plan brought in line
+// with the new one.
+function rebalanceUpcomingLanes() {
+  const laneOptions = generateLanePairs(DB.settings.laneStart, DB.settings.laneEnd);
+  if (!laneOptions.length) { toast('צריך להגדיר טווח מסלולים קודם'); return; }
+  const upcoming = DB.schedule.filter(s => s.status !== 'completed' && s.teamBId);
+  if (!upcoming.length) { toast('אין משחקים מתוזמנים עם יריבה לעדכון'); return; }
+
+  confirmAction(
+    'עדכון מסלולים למחזורים הבאים',
+    `הפעולה תחשב מחדש את המסלולים של ${upcoming.length} משחקים מתוזמנים (שלא הוזנה עבורם תוצאה) לפי חלוקה הוגנת. תאריכים, שעות ושיבוצי קבוצות לא ישתנו. להמשיך?`,
+    async () => {
+      const laneCount = {};
+      const teamStreak = {};
+      const ensureTeam = id => {
+        if (!laneCount[id]) { laneCount[id] = {}; teamStreak[id] = { lane: null, len: 0 }; }
+      };
+
+      // Seed fairness/streak state from what already actually happened, so
+      // "no 3rd in a row" and "even share" keep counting from real history
+      // instead of restarting blind at the first upcoming round.
+      const completed = DB.schedule
+        .filter(s => s.status === 'completed' && s.lane && s.teamBId)
+        .slice()
+        .sort((a, b) => (a.date || '').localeCompare(b.date || ''));
+      completed.forEach(s => {
+        [s.teamAId, s.teamBId].forEach(id => {
+          ensureTeam(id);
+          laneCount[id][s.lane] = (laneCount[id][s.lane] || 0) + 1;
+          const st = teamStreak[id];
+          if (st.lane === s.lane) st.len += 1; else { st.lane = s.lane; st.len = 1; }
+        });
+      });
+
+      const byDate = {};
+      upcoming.forEach(s => {
+        if (!byDate[s.date]) byDate[s.date] = [];
+        byDate[s.date].push(s);
+      });
+      const dates = Object.keys(byDate).sort((a, b) => a.localeCompare(b));
+
+      const changed = [];
+      dates.forEach(date => {
+        const entries = byDate[date];
+        entries.forEach(s => { ensureTeam(s.teamAId); ensureTeam(s.teamBId); });
+        const pairs = entries.map(s => [s.teamAId, s.teamBId]);
+        const assignment = assignLanesForRound(pairs, laneOptions, laneCount, teamStreak);
+        entries.forEach((s, i) => {
+          const lane = assignment[i];
+          if (s.lane !== lane) { s.lane = lane; changed.push(s); }
+          [s.teamAId, s.teamBId].forEach(id => {
+            laneCount[id][lane] = (laneCount[id][lane] || 0) + 1;
+            const st = teamStreak[id];
+            if (st.lane === lane) st.len += 1; else { st.lane = lane; st.len = 1; }
+          });
+        });
+      });
+
+      dbSave();
+      renderSchedule();
+
+      if (!changed.length) { toast('המסלולים כבר היו מאוזנים — לא בוצע שינוי'); return; }
+      try {
+        await Promise.all(changed.map(s => fbSet('schedule', s.id, s)));
+        toast(`✅ עודכנו מסלולים ל-${changed.length} משחקים`);
+      } catch(e) {
+        toast('⚠️ חלק מהעדכונים לא נשמרו בענן — לך להגדרות ולחץ "העלה נתונים מקומיים לענן"');
+      }
+    },
+    'עדכן מסלולים'
+  );
 }
 
 // ─── POSTPONE ROUNDS ────────────────────────────────────────
