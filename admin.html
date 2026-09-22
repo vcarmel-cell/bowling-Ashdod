@@ -686,6 +686,19 @@ input[type="number"].score-input { text-align: center; padding: 8px 4px; font-we
   </div>
 </div>
 
+<!-- EDIT PRACTICE MODAL -->
+<div id="edit-practice-modal" class="modal-overlay hidden">
+  <div class="modal" style="width:640px; max-width:95vw;">
+    <h2>&#x270F;&#xFE0F; עריכת ניקוד אישי</h2>
+    <input type="hidden" id="edit-practice-id">
+    <div id="edit-practice-wrap"></div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" onclick="closeModal('edit-practice-modal')">ביטול</button>
+      <button class="btn btn-primary" onclick="saveEditPractice()">&#x1F4BE; שמור שינויים</button>
+    </div>
+  </div>
+</div>
+
 <!-- CONFIRM MODAL -->
 <div id="confirm-modal" class="modal-overlay hidden">
   <div class="modal" style="width:350px; text-align:center;">
@@ -2206,7 +2219,10 @@ function renderPracticePage() {
     return `<tr>
       <td>${fmtDate(r.date)}</td>
       <td>${names || '—'}</td>
-      <td style="white-space:nowrap;"><button class="btn btn-danger btn-sm" onclick="deletePracticeEntry('${r.id}')">מחק</button></td>
+      <td style="white-space:nowrap;">
+        <button class="btn btn-secondary btn-sm" onclick="openEditPractice('${r.id}')">&#x270F;&#xFE0F; ערוך</button>
+        <button class="btn btn-danger btn-sm" onclick="deletePracticeEntry('${r.id}')">מחק</button>
+      </td>
     </tr>`;
   }).join('') || '<tr><td colspan="3" style="text-align:center; color:#94A3B8;">אין משחקי תרגול עדיין</td></tr>';
 }
@@ -2297,6 +2313,91 @@ function deletePracticeEntry(id) {
     renderSchedule();
     toast('🗑️ משחק התרגול נמחק');
   });
+}
+
+// Edits a whole practice-session row in place (all players who played that
+// night), instead of the delete-and-re-enter roundabout the "מחק"-only
+// table used to force. Games count stays fixed to what was originally
+// saved — to change it, delete and re-enter via the "משחק תרגול חדש" form.
+function openEditPractice(resultId) {
+  const r = DB.results.find(x => x.id === resultId && x.isPractice);
+  if (!r) return;
+  document.getElementById('edit-practice-id').value = resultId;
+  document.getElementById('edit-practice-wrap').innerHTML = buildEditPracticeFormHtml(r);
+  openModalEl('edit-practice-modal');
+}
+
+function buildEditPracticeFormHtml(r) {
+  const players = practiceEligiblePlayers();
+  const n = (r.games || []).length || DB.settings.gamesPerMatch || 3;
+  const header = Array.from({ length: n }, (_, i) => `<th style="text-align:center;">משחק ${i + 1}</th>`).join('');
+  const rows = players.map(p => {
+    const cells = Array.from({ length: n }, (_, i) => {
+      const g = r.games[i];
+      const existing = g && g.playerScores && g.playerScores[p.id] != null ? g.playerScores[p.id] : '';
+      return `<td><input type="number" class="score-input" min="0" max="300" id="editprac_${p.id}_${i}" value="${existing}"></td>`;
+    }).join('');
+    return `<tr><td>${p.name}</td>${cells}</tr>`;
+  }).join('') || `<tr><td colspan="${n + 1}" style="text-align:center; color:#94A3B8;">אין שחקנים ללא קבוצה מתחרה</td></tr>`;
+  return `
+    <div class="form-group" style="max-width:200px;"><label>תאריך</label><input type="date" id="editprac-date" value="${r.date || ''}"></div>
+    <p style="font-size:12px; color:#94A3B8; margin:6px 0 10px;">שורה ריקה לגמרי תוסר מהתוצאה. הזנת ציון לשחקן שלא היה ברשומה המקורית תוסיף אותו.</p>
+    <div class="table-wrap"><table>
+      <thead><tr><th>שחקן</th>${header}</tr></thead>
+      <tbody>${rows}</tbody>
+    </table></div>`;
+}
+
+async function saveEditPractice() {
+  const id = document.getElementById('edit-practice-id').value;
+  const r = DB.results.find(x => x.id === id);
+  if (!r) return;
+  const date = document.getElementById('editprac-date').value;
+  if (!date) { toast('נא לבחור תאריך'); return; }
+  const n = (r.games || []).length || DB.settings.gamesPerMatch || 3;
+  const players = practiceEligiblePlayers();
+  const games = Array.from({ length: n }, (_, i) => ({ gameNum: i + 1, playerScores: {} }));
+  let playedTeamId = null;
+  players.forEach(p => {
+    const hasAny = Array.from({ length: n }, (_, i) => document.getElementById(`editprac_${p.id}_${i}`).value.trim() !== '').some(Boolean);
+    if (!hasAny) return;
+    if (!playedTeamId) playedTeamId = p.teamId;
+    for (let i = 0; i < n; i++) {
+      games[i].playerScores[p.id] = clampScore(document.getElementById(`editprac_${p.id}_${i}`).value);
+    }
+  });
+  if (!playedTeamId) { toast('נא להזין ניקוד לפחות לשחקן אחד'); return; }
+
+  // If the date or the team changed, the schedule row this result was
+  // linked to (if any) no longer matches — release it back to "scheduled"
+  // and look for whichever solo row actually matches the new date/team.
+  const oldScheduleId = r.scheduleId;
+  const dateOrTeamChanged = date !== r.date || playedTeamId !== r.teamAId;
+  let releasedSchedule = null;
+  if (dateOrTeamChanged && oldScheduleId) {
+    const oldS = DB.schedule.find(s => s.id === oldScheduleId);
+    if (oldS) { oldS.status = 'scheduled'; releasedSchedule = oldS; }
+  }
+  r.date = date;
+  r.teamAId = playedTeamId;
+  r.games = games;
+  const scheduleRow = DB.schedule.find(s => s.date === date && !s.teamBId && s.teamAId === playedTeamId);
+  r.scheduleId = scheduleRow ? scheduleRow.id : null;
+  if (scheduleRow) scheduleRow.status = 'completed';
+
+  dbSave();
+  renderPracticePage();
+  renderSchedule();
+  closeModal('edit-practice-modal');
+  toast('✅ משחק התרגול עודכן');
+  try {
+    const writes = [fbSet('results', r.id, r)];
+    if (releasedSchedule) writes.push(fbSet('schedule', releasedSchedule.id, releasedSchedule));
+    if (scheduleRow) writes.push(fbSet('schedule', scheduleRow.id, scheduleRow));
+    await Promise.all(writes);
+  } catch(e) {
+    toast('⚠️ נשמר מקומית אך לא בענן — לך להגדרות ולחץ "העלה נתונים מקומיים לענן"');
+  }
 }
 
 // ─── EDIT RESULT ─────────────────────────────────────────────
