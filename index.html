@@ -359,6 +359,17 @@ function renderContent(DB) {
   });
   const topTeamSeries = teamSeriesEntries.sort((a, b) => b.total - a.total).slice(0, 3);
 
+  // All-time team single-game high (top 3) — best team total (handicap-inclusive)
+  // in ONE game, unlike topTeamSeries above which sums the whole match.
+  const teamGameEntries = [];
+  leagueResults.forEach(r => {
+    (r.games || []).forEach(g => {
+      teamGameEntries.push({ teamId: r.teamAId, total: gameTotal(g, 'A'), date: r.date });
+      teamGameEntries.push({ teamId: r.teamBId, total: gameTotal(g, 'B'), date: r.date });
+    });
+  });
+  const topTeamGames = teamGameEntries.sort((a, b) => b.total - a.total).slice(0, 3);
+
   // Women-only personal records — only shown once there are at least 2
   // registered female players, so the tables aren't a near-empty ranking.
   const playerGender = pid => (DB.players.find(p => p.id === pid) || {}).gender || '';
@@ -543,6 +554,21 @@ function renderContent(DB) {
           <thead><tr><th>#</th><th>קבוצה</th><th>סה"כ פינים</th><th>תאריך</th></tr></thead>
           <tbody>
             ${topTeamSeries.length ? topTeamSeries.map((e, i) => `
+              <tr class="${rankClass(i)}">
+                <td>${i + 1}</td>
+                <td><span class="color-dot" style="background:${teamColor(e.teamId)}"></span>${teamName(e.teamId)}</td>
+                <td><strong>${e.total}</strong></td>
+                <td>${fmtDate(e.date)}</td>
+              </tr>`).join('') : `<tr><td colspan="4" style="text-align:center;color:#94A3B8;">אין נתונים עדיין</td></tr>`}
+          </tbody>
+        </table></div>
+      </div>
+      <div class="card">
+        <h2>&#x1F3B3; שיא קבוצתי למשחק בודד</h2>
+        <div class="table-wrap"><table>
+          <thead><tr><th>#</th><th>קבוצה</th><th>ציון</th><th>תאריך</th></tr></thead>
+          <tbody>
+            ${topTeamGames.length ? topTeamGames.map((e, i) => `
               <tr class="${rankClass(i)}">
                 <td>${i + 1}</td>
                 <td><span class="color-dot" style="background:${teamColor(e.teamId)}"></span>${teamName(e.teamId)}</td>
