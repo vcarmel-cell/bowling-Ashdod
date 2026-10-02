@@ -324,9 +324,16 @@ input[type="number"].score-input { text-align: center; padding: 8px 4px; font-we
       </div>
       <div class="card" id="practice-form-card"></div>
       <div class="card"><div class="table-wrap"><table>
-        <thead><tr><th>תאריך</th><th>שחקנים</th><th></th></tr></thead>
+        <thead><tr><th>תאריך</th><th>שחקנים</th><th>לא הגיעו</th><th></th></tr></thead>
         <tbody id="practice-tbody"></tbody>
       </table></div></div>
+      <div class="card">
+        <h2 style="margin-bottom:14px; font-size:16px;">נוכחות לאורך העונה</h2>
+        <div class="table-wrap"><table>
+          <thead><tr><th>שחקן</th><th>שיחק</th><th>נעדר</th></tr></thead>
+          <tbody id="practice-attendance-tbody"></tbody>
+        </table></div>
+      </div>
     </div>
 
     <!-- RESULT ENTRY (hidden from nav) -->
@@ -2214,17 +2221,45 @@ function renderPracticePage() {
   document.getElementById('practice-form-card').innerHTML = buildPracticeFormHtml();
   const list = DB.results.filter(r => r.isPractice).sort((a, b) => (b.date || '').localeCompare(a.date || ''));
   document.getElementById('practice-tbody').innerHTML = list.map(r => {
-    const names = Object.keys((r.games && r.games[0] && r.games[0].playerScores) || {})
-      .map(pid => (DB.players.find(p => p.id === pid) || {}).name || '—').join(', ');
+    const playedIds = new Set();
+    (r.games || []).forEach(g => Object.keys(g.playerScores || {}).forEach(pid => playedIds.add(pid)));
+    const names = [...playedIds].map(pid => (DB.players.find(p => p.id === pid) || {}).name || '—').join(', ');
+    const absentNames = (r.absentPlayerIds || []).map(pid => (DB.players.find(p => p.id === pid) || {}).name || '—').join(', ');
+    const absentCell = absentNames ? `<span style="color:#F59E0B;">לא הגיעו: ${absentNames}</span>` : '—';
     return `<tr>
       <td>${fmtDate(r.date)}</td>
       <td>${names || '—'}</td>
+      <td style="font-size:12px;">${absentCell}</td>
       <td style="white-space:nowrap;">
         <button class="btn btn-secondary btn-sm" onclick="openEditPractice('${r.id}')">&#x270F;&#xFE0F; ערוך</button>
         <button class="btn btn-danger btn-sm" onclick="deletePracticeEntry('${r.id}')">מחק</button>
       </td>
     </tr>`;
-  }).join('') || '<tr><td colspan="3" style="text-align:center; color:#94A3B8;">אין משחקי תרגול עדיין</td></tr>';
+  }).join('') || '<tr><td colspan="4" style="text-align:center; color:#94A3B8;">אין משחקי תרגול עדיין</td></tr>';
+  renderPracticeAttendanceSummary();
+}
+
+// Season-long attendance count for unlimited-roster players (currently just
+// פייסרים) — "played" counts a practice session where the player has at
+// least one recorded game score; "absent" counts a session where they were
+// explicitly marked as not having shown up (see absentPlayerIds below).
+// Players with neither aren't on a session row at all yet (e.g. a round
+// that hasn't been logged), so they're left out of both counts rather than
+// silently counted as absent.
+function renderPracticeAttendanceSummary() {
+  const el = document.getElementById('practice-attendance-tbody');
+  if (!el) return;
+  const sessions = DB.results.filter(r => r.isPractice);
+  const rows = practiceEligiblePlayers().map(p => {
+    let played = 0, absent = 0;
+    sessions.forEach(r => {
+      const hasScore = (r.games || []).some(g => g.playerScores && g.playerScores[p.id] != null);
+      if (hasScore) played++;
+      else if (r.absentPlayerIds && r.absentPlayerIds.includes(p.id)) absent++;
+    });
+    return `<tr><td>${p.name}</td><td style="text-align:center;">${played}</td><td style="text-align:center;">${absent}</td></tr>`;
+  }).join('');
+  el.innerHTML = rows || '<tr><td colspan="3" style="text-align:center; color:#94A3B8;">אין שחקנים ללא קבוצה מתחרה</td></tr>';
 }
 
 // Pending solo schedule rows (opponent-less, not completed) — a practice
@@ -2241,8 +2276,8 @@ function buildPracticeFormHtml(gamesCount, defaultDate) {
     const cells = Array.from({ length: n }, (_, i) =>
       `<td><input type="number" class="score-input" min="0" max="300" id="prac_${p.id}_${i}"></td>`
     ).join('');
-    return `<tr><td>${p.name}</td>${cells}</tr>`;
-  }).join('') || `<tr><td colspan="${n + 1}" style="text-align:center; color:#94A3B8;">אין שחקנים ללא קבוצה מתחרה</td></tr>`;
+    return `<tr><td>${p.name}</td>${cells}<td style="text-align:center;"><input type="checkbox" id="prac_abs_${p.id}" onchange="togglePracticeAbsent('${p.id}', this.checked)"></td></tr>`;
+  }).join('') || `<tr><td colspan="${n + 2}" style="text-align:center; color:#94A3B8;">אין שחקנים ללא קבוצה מתחרה</td></tr>`;
   const pendingDates = pendingSoloScheduleDates();
   const date = defaultDate || pendingDates[0] || todayStr();
   return `
@@ -2251,14 +2286,27 @@ function buildPracticeFormHtml(gamesCount, defaultDate) {
       <div class="form-group"><label>תאריך</label><input type="date" id="prac-date" value="${date}"></div>
       <div class="form-group"><label>מספר משחקים</label><input type="number" id="prac-games-count" min="1" max="10" value="${n}" onchange="renderPracticeForm(this.value)"></div>
     </div>
-    <p style="font-size:12px; color:#94A3B8; margin-bottom:10px;">מלא ניקוד רק לשחקנים שאכן שיחקו באותו ערב — שורה ריקה לגמרי לא תישמר. אם התאריך תואם משחק מתוזמן בלוח, הוא יסומן כהושלם.</p>
+    <p style="font-size:12px; color:#94A3B8; margin-bottom:10px;">מלא ניקוד רק לשחקנים שאכן שיחקו באותו ערב. לשחקן שלא הגיע בכלל — סמן "לא הגיע" בלי להזין ניקוד, כדי שהעדרות תירשם (לא משפיעה על הממוצע האישי). שורה ריקה לגמרי ללא סימון תוסר. אם התאריך תואם משחק מתוזמן בלוח, הוא יסומן כהושלם.</p>
     <div class="table-wrap"><table>
-      <thead><tr><th>שחקן</th>${header}</tr></thead>
+      <thead><tr><th>שחקן</th>${header}<th>לא הגיע</th></tr></thead>
       <tbody>${rows}</tbody>
     </table></div>
     <div style="display:flex; justify-content:flex-end; margin-top:14px;">
       <button class="btn btn-primary" onclick="savePracticeEntry()">&#x1F4BE; שמור</button>
     </div>`;
+}
+
+// Checking "לא הגיע" for a player clears and locks their score inputs —
+// mirrors the absence checkbox UX already used for regular team matches
+// (markPlayerAbsent) so the two flows feel consistent.
+function togglePracticeAbsent(playerId, checked) {
+  const n = Math.max(1, parseInt(document.getElementById('prac-games-count')?.value) || DB.settings.gamesPerMatch || 3);
+  for (let i = 0; i < n; i++) {
+    const el = document.getElementById(`prac_${playerId}_${i}`);
+    if (!el) continue;
+    el.disabled = checked;
+    if (checked) el.value = '';
+  }
 }
 
 function renderPracticeForm(gamesCount) {
@@ -2272,21 +2320,26 @@ async function savePracticeEntry() {
   const n = Math.max(1, parseInt(document.getElementById('prac-games-count').value) || 3);
   const players = practiceEligiblePlayers();
   const games = Array.from({ length: n }, (_, i) => ({ gameNum: i + 1, playerScores: {} }));
+  const absentPlayerIds = [];
   let playedTeamId = null;
+  let touched = false;
   players.forEach(p => {
-    const hasAny = Array.from({ length: n }, (_, i) => document.getElementById(`prac_${p.id}_${i}`).value.trim() !== '').some(Boolean);
-    if (!hasAny) return; // skip players who didn't play this session
+    const isAbsent = !!document.getElementById(`prac_abs_${p.id}`)?.checked;
+    const hasAny = !isAbsent && Array.from({ length: n }, (_, i) => document.getElementById(`prac_${p.id}_${i}`).value.trim() !== '').some(Boolean);
+    if (isAbsent) { absentPlayerIds.push(p.id); touched = true; if (!playedTeamId) playedTeamId = p.teamId; return; }
+    if (!hasAny) return; // nothing entered and not marked absent — leave this player out entirely
+    touched = true;
     if (!playedTeamId) playedTeamId = p.teamId;
     for (let i = 0; i < n; i++) {
       games[i].playerScores[p.id] = clampScore(document.getElementById(`prac_${p.id}_${i}`).value);
     }
   });
-  if (!playedTeamId) { toast('נא להזין ניקוד לפחות לשחקן אחד'); return; }
+  if (!touched) { toast('נא להזין ניקוד או לסמן "לא הגיע" לפחות לשחקן אחד'); return; }
   // Link to the matching solo schedule row (if any) so it moves out of the
   // "לוח משחקים" pending list, same as a real match completing does.
   const scheduleRow = DB.schedule.find(s => s.date === date && !s.teamBId && s.teamAId === playedTeamId);
   const id = uid('prac');
-  const data = { id, date, isPractice: true, teamAId: playedTeamId, teamBId: null, scheduleId: scheduleRow ? scheduleRow.id : null, games, createdAt: new Date().toISOString() };
+  const data = { id, date, isPractice: true, teamAId: playedTeamId, teamBId: null, scheduleId: scheduleRow ? scheduleRow.id : null, games, absentPlayerIds, createdAt: new Date().toISOString() };
   DB.results.push(data);
   if (scheduleRow) scheduleRow.status = 'completed';
   dbSave();
@@ -2331,21 +2384,28 @@ function buildEditPracticeFormHtml(r) {
   const players = practiceEligiblePlayers();
   const n = (r.games || []).length || DB.settings.gamesPerMatch || 3;
   const header = Array.from({ length: n }, (_, i) => `<th style="text-align:center;">משחק ${i + 1}</th>`).join('');
+  const absentIds = r.absentPlayerIds || [];
   const rows = players.map(p => {
+    const isAbsent = absentIds.includes(p.id);
     const cells = Array.from({ length: n }, (_, i) => {
       const g = r.games[i];
       const existing = g && g.playerScores && g.playerScores[p.id] != null ? g.playerScores[p.id] : '';
-      return `<td><input type="number" class="score-input" min="0" max="300" id="editprac_${p.id}_${i}" value="${existing}"></td>`;
+      return `<td><input type="number" class="score-input" min="0" max="300" id="editprac_${p.id}_${i}" value="${existing}" ${isAbsent ? 'disabled' : ''}></td>`;
     }).join('');
-    return `<tr><td>${p.name}</td>${cells}</tr>`;
-  }).join('') || `<tr><td colspan="${n + 1}" style="text-align:center; color:#94A3B8;">אין שחקנים ללא קבוצה מתחרה</td></tr>`;
+    return `<tr><td>${p.name}</td>${cells}<td style="text-align:center;"><input type="checkbox" id="editprac_abs_${p.id}" ${isAbsent ? 'checked' : ''} onchange="toggleEditPracticeAbsent('${p.id}', this.checked)"></td></tr>`;
+  }).join('') || `<tr><td colspan="${n + 2}" style="text-align:center; color:#94A3B8;">אין שחקנים ללא קבוצה מתחרה</td></tr>`;
   return `
     <div class="form-group" style="max-width:200px;"><label>תאריך</label><input type="date" id="editprac-date" value="${r.date || ''}"></div>
-    <p style="font-size:12px; color:#94A3B8; margin:6px 0 10px;">שורה ריקה לגמרי תוסר מהתוצאה. הזנת ציון לשחקן שלא היה ברשומה המקורית תוסיף אותו.</p>
+    <p style="font-size:12px; color:#94A3B8; margin:6px 0 10px;">שורה ריקה לגמרי ללא סימון "לא הגיע" תוסר מהתוצאה. הזנת ציון לשחקן שלא היה ברשומה המקורית תוסיף אותו.</p>
     <div class="table-wrap"><table>
-      <thead><tr><th>שחקן</th>${header}</tr></thead>
+      <thead><tr><th>שחקן</th>${header}<th>לא הגיע</th></tr></thead>
       <tbody>${rows}</tbody>
     </table></div>`;
+}
+
+function toggleEditPracticeAbsent(playerId, checked) {
+  const cells = document.querySelectorAll(`[id^="editprac_${playerId}_"]`);
+  cells.forEach(el => { el.disabled = checked; if (checked) el.value = ''; });
 }
 
 async function saveEditPractice() {
@@ -2357,16 +2417,21 @@ async function saveEditPractice() {
   const n = (r.games || []).length || DB.settings.gamesPerMatch || 3;
   const players = practiceEligiblePlayers();
   const games = Array.from({ length: n }, (_, i) => ({ gameNum: i + 1, playerScores: {} }));
+  const absentPlayerIds = [];
   let playedTeamId = null;
+  let touched = false;
   players.forEach(p => {
-    const hasAny = Array.from({ length: n }, (_, i) => document.getElementById(`editprac_${p.id}_${i}`).value.trim() !== '').some(Boolean);
+    const isAbsent = !!document.getElementById(`editprac_abs_${p.id}`)?.checked;
+    const hasAny = !isAbsent && Array.from({ length: n }, (_, i) => document.getElementById(`editprac_${p.id}_${i}`).value.trim() !== '').some(Boolean);
+    if (isAbsent) { absentPlayerIds.push(p.id); touched = true; if (!playedTeamId) playedTeamId = p.teamId; return; }
     if (!hasAny) return;
+    touched = true;
     if (!playedTeamId) playedTeamId = p.teamId;
     for (let i = 0; i < n; i++) {
       games[i].playerScores[p.id] = clampScore(document.getElementById(`editprac_${p.id}_${i}`).value);
     }
   });
-  if (!playedTeamId) { toast('נא להזין ניקוד לפחות לשחקן אחד'); return; }
+  if (!touched) { toast('נא להזין ניקוד או לסמן "לא הגיע" לפחות לשחקן אחד'); return; }
 
   // If the date or the team changed, the schedule row this result was
   // linked to (if any) no longer matches — release it back to "scheduled"
@@ -2381,6 +2446,7 @@ async function saveEditPractice() {
   r.date = date;
   r.teamAId = playedTeamId;
   r.games = games;
+  r.absentPlayerIds = absentPlayerIds;
   const scheduleRow = DB.schedule.find(s => s.date === date && !s.teamBId && s.teamAId === playedTeamId);
   r.scheduleId = scheduleRow ? scheduleRow.id : null;
   if (scheduleRow) scheduleRow.status = 'completed';
