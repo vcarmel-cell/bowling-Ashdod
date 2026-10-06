@@ -2057,9 +2057,11 @@ function printResultsForm() {
   function playerRows(teamId) {
     const players = DB.players.filter(p => p.teamId === teamId);
     const cells = Array.from({ length: gamesCount }, () => `<td class="score-cell"></td>`).join('');
-    return players.map(p =>
-      `<tr><td>${p.name}${hcpOn ? ` (הנד&rsquo; ${computeHandicap(p.id)})` : ''}</td>${cells}<td class="score-cell"></td></tr>`
-    ).join('') || `<tr><td colspan="${gamesCount + 2}">אין שחקנים בקבוצה זו</td></tr>`;
+    return players.map(p => {
+      const st = playerStatsFor(p.id);
+      const avgLabel = st.games ? Math.round(st.avg) : '—';
+      return `<tr><td>${p.name} (ממוצע ${avgLabel})</td>${cells}<td class="score-cell"></td></tr>`;
+    }).join('') || `<tr><td colspan="${gamesCount + 2}">אין שחקנים בקבוצה זו</td></tr>`;
   }
 
   // soloMode (for a team excluded from the team competition) drops the
