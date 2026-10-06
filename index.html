@@ -147,7 +147,7 @@ function gameTotal(g, side) {
 // A player's cumulative pins across the season up to and including the given
 // round date (ISO strings compare correctly). Counts every recorded game,
 // including practice sessions, so it matches the per-round totals shown.
-function seasonPinsThrough(playerId, dateStr) {
+function seasonPinsThrough(DB, playerId, dateStr) {
   let total = 0;
   DB.results.forEach(r => {
     if (!r.date || r.date > dateStr) return;
@@ -434,7 +434,7 @@ function renderContent(DB) {
         return players.map(p => {
           const cells = (r.games || []).map(g => `<td style="text-align:center;">${g.playerScores && g.playerScores[p.id] != null ? g.playerScores[p.id] : '—'}</td>`).join('');
           const total = (r.games || []).reduce((s, g) => s + ((g.playerScores && g.playerScores[p.id]) || 0), 0);
-          return `<tr><td>${p.name}</td>${cells}<td style="font-weight:800;">${total}</td><td style="font-weight:800; color:#0369A1;">${seasonPinsThrough(p.id, r.date)}</td></tr>`;
+          return `<tr><td>${p.name}</td>${cells}<td style="font-weight:800;">${total}</td><td style="font-weight:800; color:#0369A1;">${seasonPinsThrough(DB, p.id, r.date)}</td></tr>`;
         }).join('') || `<tr><td colspan="${gamesCount + 3}" style="text-align:center;color:#94A3B8;">אין שחקנים</td></tr>`;
       }
       return `
