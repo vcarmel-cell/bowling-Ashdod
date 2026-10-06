@@ -144,6 +144,21 @@ function gameTotal(g, side) {
   return g[`team${side}HcpTotal`] ?? g[`team${side}Total`] ?? 0;
 }
 
+// A player's cumulative pins across the season up to and including the given
+// round date (ISO strings compare correctly). Counts every recorded game,
+// including practice sessions, so it matches the per-round totals shown.
+function seasonPinsThrough(playerId, dateStr) {
+  let total = 0;
+  DB.results.forEach(r => {
+    if (!r.date || r.date > dateStr) return;
+    (r.games || []).forEach(g => {
+      const s = g.playerScores && g.playerScores[playerId];
+      if (s != null) total += s;
+    });
+  });
+  return total;
+}
+
 // Teams excluded from the team competition (currently just פייסרים) never
 // get a scheduled match, so they're left out of standings/team records
 // entirely — their players' games only count toward personal stats.
@@ -419,8 +434,8 @@ function renderContent(DB) {
         return players.map(p => {
           const cells = (r.games || []).map(g => `<td style="text-align:center;">${g.playerScores && g.playerScores[p.id] != null ? g.playerScores[p.id] : '—'}</td>`).join('');
           const total = (r.games || []).reduce((s, g) => s + ((g.playerScores && g.playerScores[p.id]) || 0), 0);
-          return `<tr><td>${p.name}</td>${cells}<td style="font-weight:800;">${total}</td></tr>`;
-        }).join('') || `<tr><td colspan="${gamesCount + 2}" style="text-align:center;color:#94A3B8;">אין שחקנים</td></tr>`;
+          return `<tr><td>${p.name}</td>${cells}<td style="font-weight:800;">${total}</td><td style="font-weight:800; color:#0369A1;">${seasonPinsThrough(p.id, r.date)}</td></tr>`;
+        }).join('') || `<tr><td colspan="${gamesCount + 3}" style="text-align:center;color:#94A3B8;">אין שחקנים</td></tr>`;
       }
       return `
         <div class="card">
@@ -428,12 +443,12 @@ function renderContent(DB) {
           <p style="font-size:13px; color:#0369A1; margin-bottom:14px;">פינים: <strong>${aPins} : ${bPins}</strong> &nbsp;·&nbsp; נקודות ליגה: <strong>${r.teamAPoints} : ${r.teamBPoints}</strong></p>
           <h3 style="font-size:14px; margin-bottom:8px; color:#0C4A6E;"><span class="color-dot" style="background:${teamColor(r.teamAId)}"></span>${teamName(r.teamAId)}</h3>
           <div class="table-wrap"><table>
-            <thead><tr><th>שחקן</th>${gamesHeader}<th>סה"כ</th></tr></thead>
+            <thead><tr><th>שחקן</th>${gamesHeader}<th>סה"כ מחזור</th><th>מצטבר לעונה</th></tr></thead>
             <tbody>${playerRows(aPlayers)}</tbody>
           </table></div>
           <h3 style="font-size:14px; margin:16px 0 8px; color:#0C4A6E;"><span class="color-dot" style="background:${teamColor(r.teamBId)}"></span>${teamName(r.teamBId)}</h3>
           <div class="table-wrap"><table>
-            <thead><tr><th>שחקן</th>${gamesHeader}<th>סה"כ</th></tr></thead>
+            <thead><tr><th>שחקן</th>${gamesHeader}<th>סה"כ מחזור</th><th>מצטבר לעונה</th></tr></thead>
             <tbody>${playerRows(bPlayers)}</tbody>
           </table></div>
         </div>`;
