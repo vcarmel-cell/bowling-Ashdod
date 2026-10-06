@@ -484,7 +484,7 @@ function renderContent(DB) {
       <div class="card">
         <h2>דירוג אישי</h2>
         <div class="table-wrap"><table>
-          <thead><tr><th>#</th><th>שחקן</th><th>קבוצה</th><th>משחקים</th><th>ממוצע</th><th>ציון גבוה</th><th>סה"כ פינים</th></tr></thead>
+          <thead><tr><th>#</th><th>שחקן</th><th>קבוצה</th><th>משחקים</th><th>ציון גבוה</th><th>סה"כ פינים</th><th>ממוצע</th></tr></thead>
           <tbody>
             ${playerStandings.length ? playerStandings.map((s, i) => `
               <tr class="${i === 0 ? 'rank-1' : i === 1 ? 'rank-2' : i === 2 ? 'rank-3' : ''}">
@@ -492,9 +492,9 @@ function renderContent(DB) {
                 <td>${s.player.name}</td>
                 <td>${s.player.teamId ? `<span class="color-dot" style="background:${teamColor(s.player.teamId)}"></span>${teamName(s.player.teamId)}` : '—'}</td>
                 <td>${s.games}</td>
-                <td><strong>${s.avg.toFixed(2)}</strong></td>
                 <td>${s.high}</td>
                 <td><strong>${s.total}</strong></td>
+                <td><strong>${s.avg.toFixed(2)}</strong></td>
               </tr>`).join('') : `<tr><td colspan="7" style="text-align:center;color:#94A3B8;">אין נתונים עדיין</td></tr>`}
           </tbody>
         </table></div>
