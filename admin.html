@@ -2272,22 +2272,32 @@ function pendingSoloScheduleDates() {
 
 function buildPracticeFormHtml(gamesCount, defaultDate) {
   const players = practiceEligiblePlayers();
-  const n = gamesCount || DB.settings.gamesPerMatch || 3;
-  const header = Array.from({ length: n }, (_, i) => `<th style="text-align:center;">משחק ${i + 1}</th>`).join('');
-  const rows = players.map(p => {
-    const cells = Array.from({ length: n }, (_, i) =>
-      `<td><input type="number" class="score-input" min="0" max="300" id="prac_${p.id}_${i}" oninput="autoAdvanceScore(this)"></td>`
-    ).join('');
-    return `<tr><td>${p.name}</td>${cells}<td style="text-align:center;"><input type="checkbox" id="prac_abs_${p.id}" onchange="togglePracticeAbsent('${p.id}', this.checked)"></td></tr>`;
-  }).join('') || `<tr><td colspan="${n + 2}" style="text-align:center; color:#94A3B8;">אין שחקנים ללא קבוצה מתחרה</td></tr>`;
   const pendingDates = pendingSoloScheduleDates();
   const date = defaultDate || pendingDates[0] || todayStr();
+  // If a practice session was already saved for this date, load it into the
+  // form instead of showing it blank — otherwise saving again would create a
+  // second, duplicate session for the same date instead of adding to it.
+  const existing = DB.results.find(r => r.isPractice && r.date === date);
+  const n = gamesCount || (existing && existing.games ? existing.games.length : null) || DB.settings.gamesPerMatch || 3;
+  const existingAbsent = (existing && existing.absentPlayerIds) || [];
+  const header = Array.from({ length: n }, (_, i) => `<th style="text-align:center;">משחק ${i + 1}</th>`).join('');
+  const rows = players.map(p => {
+    const isAbsent = existingAbsent.includes(p.id);
+    const cells = Array.from({ length: n }, (_, i) => {
+      const g = existing && existing.games && existing.games[i];
+      const existingScore = g && g.playerScores && g.playerScores[p.id] != null ? g.playerScores[p.id] : '';
+      return `<td><input type="number" class="score-input" min="0" max="300" id="prac_${p.id}_${i}" value="${existingScore}" oninput="autoAdvanceScore(this)" ${isAbsent ? 'disabled' : ''}></td>`;
+    }).join('');
+    return `<tr><td>${p.name}</td>${cells}<td style="text-align:center;"><input type="checkbox" id="prac_abs_${p.id}" ${isAbsent ? 'checked' : ''} onchange="togglePracticeAbsent('${p.id}', this.checked)"></td></tr>`;
+  }).join('') || `<tr><td colspan="${n + 2}" style="text-align:center; color:#94A3B8;">אין שחקנים ללא קבוצה מתחרה</td></tr>`;
   return `
-    <h2 style="margin-bottom:14px;">משחק תרגול חדש</h2>
+    <h2 style="margin-bottom:14px;">${existing ? '&#x270F;&#xFE0F; עדכון משחק תרגול קיים' : '&#x1F195; משחק תרגול חדש'}</h2>
+    <input type="hidden" id="prac-existing-id" value="${existing ? existing.id : ''}">
     <div class="form-row">
-      <div class="form-group"><label>תאריך</label><input type="date" id="prac-date" value="${date}"></div>
-      <div class="form-group"><label>מספר משחקים</label><input type="number" id="prac-games-count" min="1" max="10" value="${n}" onchange="renderPracticeForm(this.value)"></div>
+      <div class="form-group"><label>תאריך</label><input type="date" id="prac-date" value="${date}" onchange="switchPracticeFormDate(this.value)"></div>
+      <div class="form-group"><label>מספר משחקים</label><input type="number" id="prac-games-count" min="1" max="10" value="${n}" onchange="renderPracticeForm(this.value)" ${existing ? 'disabled title="לא ניתן לשנות מספר משחקים לרשומה קיימת — מחק ומלא מחדש אם צריך"' : ''}></div>
     </div>
+    ${existing ? `<p style="font-size:12px; color:#0369A1; margin-bottom:10px;">לתאריך זה יש כבר משחק תרגול שמור — הניקוד הקיים נטען לטופס. ניתן להוסיף שחקן נוסף או לתקן ניקוד בלי לפגוע במי שכבר נשמר; שמירה תעדכן את הרשומה הקיימת ולא תיצור כפילות.</p>` : ''}
     <p style="font-size:12px; color:#94A3B8; margin-bottom:10px;">מלא ניקוד רק לשחקנים שאכן שיחקו באותו ערב. לשחקן שלא הגיע בכלל — סמן "לא הגיע" בלי להזין ניקוד, כדי שהעדרות תירשם (לא משפיעה על הממוצע האישי). שורה ריקה לגמרי ללא סימון תוסר. אם התאריך תואם משחק מתוזמן בלוח, הוא יסומן כהושלם.</p>
     <div class="table-wrap"><table>
       <thead><tr><th>שחקן</th>${header}<th>לא הגיע</th></tr></thead>
@@ -2296,6 +2306,10 @@ function buildPracticeFormHtml(gamesCount, defaultDate) {
     <div style="display:flex; justify-content:flex-end; margin-top:14px;">
       <button class="btn btn-primary" onclick="savePracticeEntry()">&#x1F4BE; שמור</button>
     </div>`;
+}
+
+function switchPracticeFormDate(date) {
+  document.getElementById('practice-form-card').innerHTML = buildPracticeFormHtml(null, date);
 }
 
 // Checking "לא הגיע" for a player clears and locks their score inputs —
@@ -2319,6 +2333,10 @@ function renderPracticeForm(gamesCount) {
 async function savePracticeEntry() {
   const date = document.getElementById('prac-date').value;
   if (!date) { toast('נא לבחור תאריך'); return; }
+  // Set when buildPracticeFormHtml found an already-saved session for this
+  // date — update that record in place instead of creating a second one.
+  const existingId = document.getElementById('prac-existing-id')?.value || null;
+  const existingRecord = existingId ? DB.results.find(r => r.id === existingId) : null;
   const n = Math.max(1, parseInt(document.getElementById('prac-games-count').value) || 3);
   const players = practiceEligiblePlayers();
   const games = Array.from({ length: n }, (_, i) => ({ gameNum: i + 1, playerScores: {} }));
@@ -2340,13 +2358,18 @@ async function savePracticeEntry() {
   // Link to the matching solo schedule row (if any) so it moves out of the
   // "לוח משחקים" pending list, same as a real match completing does.
   const scheduleRow = DB.schedule.find(s => s.date === date && !s.teamBId && s.teamAId === playedTeamId);
-  const id = uid('prac');
-  const data = { id, date, isPractice: true, teamAId: playedTeamId, teamBId: null, scheduleId: scheduleRow ? scheduleRow.id : null, games, absentPlayerIds, createdAt: new Date().toISOString() };
-  DB.results.push(data);
+  const id = existingId || uid('prac');
+  const data = {
+    id, date, isPractice: true, teamAId: playedTeamId, teamBId: null,
+    scheduleId: scheduleRow ? scheduleRow.id : null, games, absentPlayerIds,
+    createdAt: existingRecord ? existingRecord.createdAt : new Date().toISOString()
+  };
+  const idx = DB.results.findIndex(r => r.id === id);
+  if (idx >= 0) DB.results[idx] = data; else DB.results.push(data);
   if (scheduleRow) scheduleRow.status = 'completed';
   dbSave();
   renderPracticePage();
-  toast('✅ משחק התרגול נשמר');
+  toast(existingRecord ? '✅ משחק התרגול עודכן' : '✅ משחק התרגול נשמר');
   try {
     await Promise.all([fbSet('results', id, data), ...(scheduleRow ? [fbSet('schedule', scheduleRow.id, scheduleRow)] : [])]);
   } catch(e) {
