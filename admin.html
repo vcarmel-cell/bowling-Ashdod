@@ -2509,7 +2509,7 @@ function buildEditResultRoster(r) {
       const cells = Array.from({ length: gamesCount }, (_, i) => {
         const g = r.games[i];
         const existing = g && g.playerScores && g.playerScores[p.id] != null ? g.playerScores[p.id] : '';
-        return `<td><input type="number" class="score-input" min="0" max="300" id="edit_${side}_${p.id}_${i}" value="${existing}" oninput="recalcEditResultTotals()"></td>`;
+        return `<td><input type="number" class="score-input" min="0" max="300" id="edit_${side}_${p.id}_${i}" value="${existing}" oninput="recalcEditResultTotals(); autoAdvanceScore(this)"></td>`;
       }).join('');
       const hcpVal = (r.playerHandicaps && r.playerHandicaps[p.id]) || 0;
       const hcpCell = hcpOn ? `<td style="text-align:center; color:#0369A1;">${hcpVal}</td>` : '';
@@ -2775,7 +2775,7 @@ function buildMatchEntryCard(s) {
     const header = Array.from({ length: gamesCount }, (_, i) => `<th style="text-align:center;">משחק ${i + 1}</th>`).join('');
     const rows = players.map((p, idx) => {
       const cells = Array.from({ length: gamesCount }, (_, i) =>
-        `<td><input type="number" class="score-input" min="0" max="300" id="sc_${s.id}_${side}_${p.id}_${i}" oninput="recalcMatchEntryTotals('${s.id}')"></td>`
+        `<td><input type="number" class="score-input" min="0" max="300" id="sc_${s.id}_${side}_${p.id}_${i}" oninput="recalcMatchEntryTotals('${s.id}'); autoAdvanceScore(this)"></td>`
       ).join('');
       const hcpCell = hcpOn ? `<td style="text-align:center; color:#0369A1;">${computeHandicap(p.id)}</td>` : '';
       const absentCell = `<td style="text-align:center;"><input type="checkbox" id="abs_${s.id}_${side}_${p.id}" title="נעדר — ימולא אוטומטית לפי הממוצע האישי פחות 10 נקודות" onchange="markPlayerAbsent('${s.id}','${side}','${p.id}', this.checked)"></td>`;
@@ -2858,6 +2858,17 @@ function teamFullyAbsent(players, checkboxIdFn) {
 function updateCountedHcpLabel(id, value) {
   const el = document.getElementById(id);
   if (el) el.textContent = value;
+}
+
+// Scores are at most 3 digits (max 300), so once a 3-digit score is typed the
+// cursor moves on by itself to the next game cell — the next input in the page
+// order, which runs game by game along each player's row. Disabled (absent)
+// inputs are skipped.
+function autoAdvanceScore(el) {
+  if (!el || el.value.length < 3) return;
+  const inputs = Array.from(document.querySelectorAll('input.score-input'));
+  const next = inputs.slice(inputs.indexOf(el) + 1).find(x => !x.disabled);
+  if (next) { next.focus(); next.select(); }
 }
 
 function recalcMatchEntryTotals(scheduleId) {
