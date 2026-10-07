@@ -2276,7 +2276,7 @@ function buildPracticeFormHtml(gamesCount, defaultDate) {
   const header = Array.from({ length: n }, (_, i) => `<th style="text-align:center;">משחק ${i + 1}</th>`).join('');
   const rows = players.map(p => {
     const cells = Array.from({ length: n }, (_, i) =>
-      `<td><input type="number" class="score-input" min="0" max="300" id="prac_${p.id}_${i}"></td>`
+      `<td><input type="number" class="score-input" min="0" max="300" id="prac_${p.id}_${i}" oninput="autoAdvanceScore(this)"></td>`
     ).join('');
     return `<tr><td>${p.name}</td>${cells}<td style="text-align:center;"><input type="checkbox" id="prac_abs_${p.id}" onchange="togglePracticeAbsent('${p.id}', this.checked)"></td></tr>`;
   }).join('') || `<tr><td colspan="${n + 2}" style="text-align:center; color:#94A3B8;">אין שחקנים ללא קבוצה מתחרה</td></tr>`;
@@ -2392,7 +2392,7 @@ function buildEditPracticeFormHtml(r) {
     const cells = Array.from({ length: n }, (_, i) => {
       const g = r.games[i];
       const existing = g && g.playerScores && g.playerScores[p.id] != null ? g.playerScores[p.id] : '';
-      return `<td><input type="number" class="score-input" min="0" max="300" id="editprac_${p.id}_${i}" value="${existing}" ${isAbsent ? 'disabled' : ''}></td>`;
+      return `<td><input type="number" class="score-input" min="0" max="300" id="editprac_${p.id}_${i}" value="${existing}" oninput="autoAdvanceScore(this)" ${isAbsent ? 'disabled' : ''}></td>`;
     }).join('');
     return `<tr><td>${p.name}</td>${cells}<td style="text-align:center;"><input type="checkbox" id="editprac_abs_${p.id}" ${isAbsent ? 'checked' : ''} onchange="toggleEditPracticeAbsent('${p.id}', this.checked)"></td></tr>`;
   }).join('') || `<tr><td colspan="${n + 2}" style="text-align:center; color:#94A3B8;">אין שחקנים ללא קבוצה מתחרה</td></tr>`;
