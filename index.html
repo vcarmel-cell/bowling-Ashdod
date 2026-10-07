@@ -263,6 +263,20 @@ function computePinsLadderTeamPoints(DB) {
   return teamPoints;
 }
 
+// Points a team earned for ONE round under the alternative scoring methods
+// (roundRobin/pinsLadder), where a team is compared against everyone who
+// played that date rather than a single scheduled opponent — so a single
+// match card's "team A vs team B" pairing no longer has a meaningful head-
+// to-head score. Reuses the season-total functions above by scoping them
+// to just that date's results. Returns null for the standard method, where
+// the pairwise teamAPoints/teamBPoints already stored on the result apply.
+function roundPointsFor(DB, dateStr) {
+  const method = DB.settings && DB.settings.scoringMethod;
+  if (method !== 'roundRobin' && method !== 'pinsLadder') return null;
+  const roundDB = { ...DB, results: DB.results.filter(r => r.date === dateStr) };
+  return method === 'roundRobin' ? computeRoundRobinTeamPoints(roundDB) : computePinsLadderTeamPoints(roundDB);
+}
+
 // Handicap for the public roster view — mirrors admin.html's
 // computeHandicap: manual handicap/average (for players without game
 // history yet) take priority over the auto formula, which otherwise
@@ -431,9 +445,13 @@ function renderContent(DB) {
 
   function buildResultCardsHtml(dateStr) {
     const results = dateStr ? leagueResults.filter(r => r.date === dateStr) : [];
+    const roundPoints = dateStr ? roundPointsFor(DB, dateStr) : null;
     return results.length ? results.map(r => {
       const aPins = (r.games || []).reduce((s, g) => s + gameTotal(g, 'A'), 0);
       const bPins = (r.games || []).reduce((s, g) => s + gameTotal(g, 'B'), 0);
+      const pointsLine = roundPoints
+        ? `נקודות מחזור: <strong>${teamName(r.teamAId)} ${roundPoints[r.teamAId] ?? 0}</strong> &nbsp;·&nbsp; <strong>${teamName(r.teamBId)} ${roundPoints[r.teamBId] ?? 0}</strong>`
+        : `נקודות ליגה: <strong>${r.teamAPoints} : ${r.teamBPoints}</strong>`;
       const aPlayers = DB.players.filter(p => p.teamId === r.teamAId);
       const bPlayers = DB.players.filter(p => p.teamId === r.teamBId);
       const gamesCount = (r.games || []).length;
@@ -448,7 +466,7 @@ function renderContent(DB) {
       return `
         <div class="card">
           <h2>${teamName(r.teamAId)} נגד ${teamName(r.teamBId)} — ${fmtDate(r.date)}</h2>
-          <p style="font-size:13px; color:#0369A1; margin-bottom:14px;">פינים: <strong>${aPins} : ${bPins}</strong> &nbsp;·&nbsp; נקודות ליגה: <strong>${r.teamAPoints} : ${r.teamBPoints}</strong></p>
+          <p style="font-size:13px; color:#0369A1; margin-bottom:14px;">פינים: <strong>${aPins} : ${bPins}</strong> &nbsp;·&nbsp; ${pointsLine}</p>
           <h3 style="font-size:14px; margin-bottom:8px; color:#0C4A6E;"><span class="color-dot" style="background:${teamColor(r.teamAId)}"></span>${teamName(r.teamAId)}</h3>
           <div class="table-wrap"><table>
             <thead><tr><th>שחקן</th>${gamesHeader}<th>סה"כ מחזור</th><th>מצטבר לעונה</th></tr></thead>
