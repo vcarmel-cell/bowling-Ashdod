@@ -545,16 +545,21 @@ function renderContent(DB) {
         <div class="table-wrap"><table>
           <thead><tr><th>קבוצה א׳</th><th>קבוצה ב׳</th><th>פינים</th><th>נקודות</th></tr></thead>
           <tbody>
-            ${lastRoundResults.length ? lastRoundResults.map(r => {
-              const aPins = (r.games || []).reduce((s, g) => s + gameTotal(g, 'A'), 0);
-              const bPins = (r.games || []).reduce((s, g) => s + gameTotal(g, 'B'), 0);
-              return `<tr>
-                <td><span class="color-dot" style="background:${teamColor(r.teamAId)}"></span>${teamName(r.teamAId)}</td>
-                <td><span class="color-dot" style="background:${teamColor(r.teamBId)}"></span>${teamName(r.teamBId)}</td>
-                <td>${aPins} : ${bPins}</td>
-                <td><span class="badge">${r.teamAPoints} : ${r.teamBPoints}</span></td>
-              </tr>`;
-            }).join('') : `<tr><td colspan="4" style="text-align:center;color:#94A3B8;">אין נתונים עדיין</td></tr>`}
+            ${lastRoundResults.length ? (() => {
+              const lastRoundPoints = latestDate ? roundPointsFor(DB, latestDate) : null;
+              return lastRoundResults.map(r => {
+                const aPins = (r.games || []).reduce((s, g) => s + gameTotal(g, 'A'), 0);
+                const bPins = (r.games || []).reduce((s, g) => s + gameTotal(g, 'B'), 0);
+                const aPts = lastRoundPoints ? (lastRoundPoints[r.teamAId] ?? 0) : r.teamAPoints;
+                const bPts = lastRoundPoints ? (lastRoundPoints[r.teamBId] ?? 0) : r.teamBPoints;
+                return `<tr>
+                  <td><span class="color-dot" style="background:${teamColor(r.teamAId)}"></span>${teamName(r.teamAId)}</td>
+                  <td><span class="color-dot" style="background:${teamColor(r.teamBId)}"></span>${teamName(r.teamBId)}</td>
+                  <td>${aPins} : ${bPins}</td>
+                  <td><span class="badge" title="${lastRoundPoints ? 'נקודות שכל קבוצה צברה במחזור, מול כל הקבוצות' : ''}">${aPts} : ${bPts}</span></td>
+                </tr>`;
+              }).join('');
+            })() : `<tr><td colspan="4" style="text-align:center;color:#94A3B8;">אין נתונים עדיין</td></tr>`}
           </tbody>
         </table></div>
       </div>
