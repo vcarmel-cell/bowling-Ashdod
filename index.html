@@ -46,6 +46,24 @@ header p { font-size: 13px; color: #7DD3FC; margin-top: 4px; }
 .card h2 { font-size: 16px; margin-bottom: 14px; color: #0C4A6E; }
 
 .table-wrap { overflow-x: auto; }
+
+.chart-wrap { overflow-x: auto; }
+.chart-bar-hit { cursor: pointer; }
+.chart-bar-hit:hover rect.chart-bar, .chart-bar-hit:focus rect.chart-bar { fill: #0284C7; }
+.chart-bar-hit:focus { outline: none; }
+.chart-bar-hit:focus rect.chart-bar { stroke: #083D5C; stroke-width: 2; }
+.chart-tooltip {
+  position: fixed; display: none; pointer-events: none; z-index: 50;
+  background: #083D5C; color: #fff; font-size: 12px; line-height: 1.5;
+  padding: 7px 10px; border-radius: 8px; box-shadow: 0 4px 14px rgba(8,61,92,0.25);
+  white-space: nowrap;
+}
+.chart-tooltip strong { font-size: 13px; }
+.chart-toggle-btn {
+  font-size: 12px; font-weight: 700; color: #0369A1; background: #F0F9FF;
+  border: 1px solid #BAE6FD; border-radius: 8px; padding: 5px 10px; cursor: pointer;
+}
+.chart-toggle-btn:hover { background: #E0F2FE; }
 table { width: 100%; border-collapse: collapse; }
 th {
   background: #F0F9FF; text-align: right; padding: 10px 12px; font-size: 13px;
@@ -163,6 +181,165 @@ function seasonPinsThrough(DB, playerId, dateStr) {
     });
   });
   return total;
+}
+
+// Average raw pins per individual game bowled on one round date, across every
+// player together — team matches and practice sessions alike, excluding any
+// score auto-filled for a player marked absent (that's a stand-in for the
+// team total, not a real game). Dividing by the game count (not the player
+// count) is what makes this a fair quality measure: a round with more people
+// playing adds to both the pins total and the game count together, so
+// attendance doesn't skew it the way a plain sum would. Same per-game
+// definition of "average" used everywhere else on this page (playerStatsFor).
+function avgPinsForRound(DB, dateStr) {
+  let total = 0, games = 0;
+  DB.results.forEach(r => {
+    if (r.date !== dateStr) return;
+    const absent = r.absentPlayerIds || [];
+    (r.games || []).forEach(g => {
+      Object.entries(g.playerScores || {}).forEach(([pid, score]) => {
+        if (score == null || absent.includes(pid)) return;
+        total += score; games++;
+      });
+    });
+  });
+  return games ? total / games : 0;
+}
+
+// Compact axis/tick formatting: 1,000+ collapses to "1K"/"1.5K"; below that,
+// the plain rounded number.
+function compactNum(n) {
+  if (n >= 1000) {
+    const k = n / 1000;
+    return (Math.round(k * 10) / 10).toString().replace(/\.0$/, '') + 'K';
+  }
+  return String(Math.round(n));
+}
+
+// Rounds an axis max up to a "nice" 1/2/5-times-a-power-of-ten value, so
+// gridlines land on round numbers instead of the raw data max.
+function niceAxisMax(maxVal) {
+  if (maxVal <= 0) return 10;
+  const magnitude = Math.pow(10, Math.floor(Math.log10(maxVal)));
+  const residual = maxVal / magnitude;
+  const niceResidual = residual <= 1 ? 1 : residual <= 2 ? 2 : residual <= 5 ? 5 : 10;
+  return niceResidual * magnitude;
+}
+
+// Bar chart of average raw pins per game for each round (`r.avg`, from
+// avgPinsForRound), across every player together — one bar per round. A
+// single series, so no legend box; the card title names what's plotted.
+// Plain inline SVG, no chart library, to match the rest of the page. Each
+// bar is a real SVG element (not a <img>/canvas snapshot) with its own
+// hover/focus tooltip; a plain-table fallback (built by the caller) keeps
+// every value reachable without hovering.
+function buildRoundPinsChartHtml(rounds) {
+  if (!rounds.length) return `<p style="text-align:center;color:#94A3B8;padding:20px;">אין נתונים עדיין</p>`;
+  // Extra top room for the value label printed above every bar; extra bottom
+  // room for the round-number ticks plus the "מחזור" axis title under them;
+  // extra left room for the Y-axis numbers (see padLeft note below).
+  const bandW = 46, chartH = 240, padTop = 34, padBottom = 42, padLeft = 32, padRight = 6;
+  const plotH = chartH - padTop - padBottom;
+  const baselineY = padTop + plotH;
+  const chartW = Math.max(rounds.length * bandW + padLeft + padRight, 320);
+  const axisMax = niceAxisMax(Math.max(...rounds.map(r => r.avg)) * 1.15);
+  const barMaxW = 24;
+
+  // Y-axis numbers sit at the LEFT edge with text-anchor="start": Chromium
+  // (at least the version this was tested on) fails to render SVG <text>
+  // with text-anchor="end" at all when nested under an RTL-direction
+  // ancestor (this page is dir="rtl") — not just mispositioned, genuinely
+  // invisible. "start"/"middle" anchors are unaffected, so the axis lives
+  // on the left instead of the conventional right.
+  const gridlines = Array.from({ length: 5 }, (_, i) => {
+    const val = axisMax * i / 4;
+    const y = baselineY - (val / axisMax) * plotH;
+    return `<line x1="${padLeft}" y1="${y}" x2="${chartW - padRight}" y2="${y}" stroke="#E0F2FE" stroke-width="1"/>
+      <text x="2" y="${y - 3}" font-size="10" fill="#94A3B8">${compactNum(val)}</text>`;
+  }).join('');
+  // Axis titles: "פינים" (Y) above the Y-axis numbers it labels; "מחזור" (X)
+  // centered under the round-number ticks.
+  const axisTitles = `
+    <text x="2" y="12" font-size="11" fill="#0369A1" font-weight="700">פינים &#8593;</text>
+    <text x="${padLeft + (chartW - padLeft - padRight) / 2}" y="${chartH - 4}" font-size="11" fill="#0369A1" font-weight="700" text-anchor="middle">מחזור &#8594;</text>`;
+
+  const bars = rounds.map((r, i) => {
+    const band = (chartW - padLeft - padRight) / rounds.length;
+    const barW = Math.min(barMaxW, band - 6);
+    const x = padLeft + band * i + (band - barW) / 2;
+    const barH = axisMax ? (r.avg / axisMax) * plotH : 0;
+    const barY = baselineY - barH;
+    const rTop = Math.min(4, barH);
+    const path = barH <= 0 ? '' : rTop > 0
+      ? `M${x},${barY + rTop} Q${x},${barY} ${x + rTop},${barY} L${x + barW - rTop},${barY} Q${x + barW},${barY} ${x + barW},${barY + rTop} L${x + barW},${baselineY} L${x},${baselineY} Z`
+      : `M${x},${barY} L${x + barW},${barY} L${x + barW},${baselineY} L${x},${baselineY} Z`;
+    const roundNum = (r.label.match(/\d+/) || [])[0] || String(i + 1);
+    const tipText = `${r.label} · ${fmtDate(r.date)}\nממוצע ${r.avg.toFixed(1)} פינים למשחק`;
+    // Escaped for use inside a single-quoted JS string literal embedded in an
+    // HTML attribute — a raw newline there would break the inline handler
+    // with a syntax error, so it has to become the two-character \n escape.
+    const tipJs = tipText.replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/\n/g, '\\n');
+    return `
+      <g class="chart-bar-hit" tabindex="0" role="img" aria-label="${r.label}, ${fmtDate(r.date)}, ממוצע ${r.avg.toFixed(1)} פינים למשחק"
+         onpointerenter="showRoundPinsTooltip(event, '${tipJs}')"
+         onpointermove="moveRoundPinsTooltip(event)"
+         onpointerleave="hideRoundPinsTooltip()"
+         onfocus="showRoundPinsTooltip(event, '${tipJs}')"
+         onblur="hideRoundPinsTooltip()">
+        <rect x="${padLeft + band * i}" y="${padTop}" width="${band}" height="${plotH}" fill="transparent"/>
+        ${path ? `<path class="chart-bar" d="${path}" fill="#0EA5E9"/>` : ''}
+        ${barH > 0 ? `<text x="${x + barW / 2}" y="${Math.max(padTop - 6, barY - 6)}" font-size="9.5" fill="#0C4A6E" font-weight="700" text-anchor="middle">${r.avg.toFixed(1)}</text>` : ''}
+        <text x="${x + barW / 2}" y="${chartH - padBottom + 16}" font-size="11" fill="#64748B" text-anchor="middle">${roundNum}</text>
+      </g>`;
+  }).join('');
+
+  return `
+    <svg viewBox="0 0 ${chartW} ${chartH}" width="${chartW}" height="${chartH}" style="display:block; direction:ltr;" direction="ltr">
+      ${gridlines}
+      ${axisTitles}
+      ${bars}
+    </svg>`;
+}
+
+function showRoundPinsTooltip(evt, text) {
+  const el = document.getElementById('round-pins-tooltip');
+  if (!el) return;
+  el.innerHTML = '';
+  text.split('\n').forEach((line, i) => {
+    const row = document.createElement(i === 0 ? 'div' : 'strong');
+    row.textContent = line;
+    el.appendChild(row);
+  });
+  el.style.display = 'block';
+  moveRoundPinsTooltip(evt);
+}
+function moveRoundPinsTooltip(evt) {
+  const el = document.getElementById('round-pins-tooltip');
+  if (!el || el.style.display === 'none') return;
+  // Keyboard focus carries no pointer coordinates — anchor to the bar's own
+  // position on screen instead.
+  let px = evt.clientX, py = evt.clientY;
+  if (px == null && evt.target && evt.target.getBoundingClientRect) {
+    const rect = evt.target.getBoundingClientRect();
+    px = rect.left + rect.width / 2;
+    py = rect.top;
+  }
+  const pad = 14;
+  let x = px + pad, y = py + pad;
+  if (x + 180 > window.innerWidth) x = px - 180 - pad;
+  if (y + 60 > window.innerHeight) y = py - 60 - pad;
+  el.style.left = x + 'px';
+  el.style.top = y + 'px';
+}
+function hideRoundPinsTooltip() {
+  const el = document.getElementById('round-pins-tooltip');
+  if (el) el.style.display = 'none';
+}
+function toggleRoundPinsView(view) {
+  document.getElementById('round-pins-chart-wrap').style.display = view === 'chart' ? '' : 'none';
+  document.getElementById('round-pins-table-wrap').style.display = view === 'table' ? '' : 'none';
+  document.getElementById('round-pins-btn-chart').setAttribute('aria-pressed', String(view === 'chart'));
+  document.getElementById('round-pins-btn-table').setAttribute('aria-pressed', String(view === 'table'));
 }
 
 // Teams excluded from the team competition (currently just פייסרים) never
@@ -591,6 +768,35 @@ function renderContent(DB) {
             })()}
           </tbody>
         </table></div>
+      </div>
+      <div class="card">
+        ${(() => {
+          const roundDates = [...resultRoundDates].reverse();
+          const rounds = roundDates.map(d => ({
+            date: d,
+            label: (DB.schedule.find(s => s.date === d && s.round) || {}).round || fmtDate(d),
+            avg: avgPinsForRound(DB, d)
+          }));
+          return `
+          <div style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:8px; margin-bottom:14px;">
+            <h2 style="margin-bottom:0;">&#x1F4C8; ממוצע פינים למשחק, לפי מחזור — כל השחקנים יחד</h2>
+            <div role="group" aria-label="תצוגה">
+              <button type="button" id="round-pins-btn-chart" class="chart-toggle-btn" aria-pressed="true" onclick="toggleRoundPinsView('chart')">גרף</button>
+              <button type="button" id="round-pins-btn-table" class="chart-toggle-btn" aria-pressed="false" onclick="toggleRoundPinsView('table')">טבלה</button>
+            </div>
+          </div>
+          <p style="font-size:12px; color:#94A3B8; margin-bottom:10px;">ממוצע פינים גולמי (ללא הנדיקפ) למשחק בודד, על פני כל השחקנים במחזור — משחקי קבוצות ותרגול פייסרים יחד. מחושב לפי משחק (לא לפי שחקן), כך שמספר המשתתפים במחזור לא משפיע על הממוצע.</p>
+          <div id="round-pins-chart-wrap" class="chart-wrap">${buildRoundPinsChartHtml(rounds)}</div>
+          <div id="round-pins-table-wrap" class="table-wrap" style="display:none;">
+            <table>
+              <thead><tr><th>מחזור</th><th>תאריך</th><th>ממוצע פינים למשחק</th></tr></thead>
+              <tbody>
+                ${rounds.length ? rounds.map(r => `<tr><td>${r.label}</td><td>${fmtDate(r.date)}</td><td>${r.avg.toFixed(1)}</td></tr>`).join('') : `<tr><td colspan="3" style="text-align:center;color:#94A3B8;">אין נתונים עדיין</td></tr>`}
+              </tbody>
+            </table>
+          </div>
+          <div id="round-pins-tooltip" class="chart-tooltip"></div>`;
+        })()}
       </div>
       <div class="card">
         <h2>&#x1F3AF; שיא אישי למשחק בודד</h2>
