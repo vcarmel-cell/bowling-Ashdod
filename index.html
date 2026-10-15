@@ -47,7 +47,7 @@ header p { font-size: 13px; color: #7DD3FC; margin-top: 4px; }
 
 .table-wrap { overflow-x: auto; }
 
-.chart-wrap { overflow-x: auto; }
+.chart-wrap { overflow-x: auto; text-align: left; }
 .chart-bar-hit { cursor: pointer; }
 .chart-bar-hit:hover rect.chart-bar, .chart-bar-hit:focus rect.chart-bar { fill: #0284C7; }
 .chart-bar-hit:focus { outline: none; }
@@ -206,6 +206,50 @@ function avgPinsForRound(DB, dateStr) {
   return games ? total / games : 0;
 }
 
+// Every time the all-time personal single-game high score was broken,
+// walking the season in round order. Compares the BEST score of each round
+// (not every individual game) against the running record — games on the
+// same date have no real time order between them, so scanning them one by
+// one would call a same-day climb from game to game a sequence of separate
+// "records," which isn't a real story. One round can therefore produce at
+// most one milestone. roundDatesAsc must already be every played round in
+// chronological order, since that's what positions each milestone on the
+// chart's round axis. Absent-filled scores are excluded, same as the
+// "שיא אישי למשחק בודד" table this is the timeline version of.
+function recordMilestones(DB, roundDatesAsc) {
+  const byDate = {};
+  DB.results.forEach(r => (r.games || []).forEach(g => {
+    Object.entries(g.playerScores || {}).forEach(([pid, score]) => {
+      if (score == null || (r.absentPlayerIds && r.absentPlayerIds.includes(pid))) return;
+      (byDate[r.date] = byDate[r.date] || []).push({ pid, score });
+    });
+  }));
+  let runningMax = -1;
+  const milestones = [];
+  roundDatesAsc.forEach((d, roundIndex) => {
+    const dayEntries = byDate[d] || [];
+    if (!dayEntries.length) return;
+    const best = dayEntries.reduce((a, b) => (b.score > a.score ? b : a));
+    if (best.score > runningMax) {
+      runningMax = best.score;
+      milestones.push({ date: d, roundIndex, score: best.score, pid: best.pid });
+    }
+  });
+  return milestones;
+}
+
+// Extends a chronological list of already-played round dates with the next
+// scheduled-but-not-yet-played round (if any) — every round chart ends one
+// round past the latest result instead of stopping abruptly at the edge of
+// the data, so there's visible room on the axis for what's coming. "Not yet
+// played" means no result exists for that date at all, regardless of a
+// schedule row's own status field.
+function withNextRound(DB, playedDatesAsc) {
+  const played = new Set(playedDatesAsc);
+  const next = [...new Set(DB.schedule.map(s => s.date))].filter(d => d && !played.has(d)).sort()[0];
+  return next ? [...playedDatesAsc, next] : playedDatesAsc;
+}
+
 // Compact axis/tick formatting: 1,000+ collapses to "1K"/"1.5K"; below that,
 // the plain rounded number.
 function compactNum(n) {
@@ -242,7 +286,7 @@ function buildRoundPinsChartHtml(rounds) {
   const plotH = chartH - padTop - padBottom;
   const baselineY = padTop + plotH;
   const chartW = Math.max(rounds.length * bandW + padLeft + padRight, 320);
-  const axisMax = niceAxisMax(Math.max(...rounds.map(r => r.avg)) * 1.15);
+  const axisMax = niceAxisMax(Math.max(0, ...rounds.map(r => r.avg || 0)) * 1.15);
   const barMaxW = 24;
 
   // Y-axis numbers sit at the LEFT edge with text-anchor="start": Chromium
@@ -267,25 +311,28 @@ function buildRoundPinsChartHtml(rounds) {
     const band = (chartW - padLeft - padRight) / rounds.length;
     const barW = Math.min(barMaxW, band - 6);
     const x = padLeft + band * i + (band - barW) / 2;
-    const barH = axisMax ? (r.avg / axisMax) * plotH : 0;
+    const hasData = r.avg != null;
+    const barH = hasData && axisMax ? (r.avg / axisMax) * plotH : 0;
     const barY = baselineY - barH;
     const rTop = Math.min(4, barH);
     const path = barH <= 0 ? '' : rTop > 0
       ? `M${x},${barY + rTop} Q${x},${barY} ${x + rTop},${barY} L${x + barW - rTop},${barY} Q${x + barW},${barY} ${x + barW},${barY + rTop} L${x + barW},${baselineY} L${x},${baselineY} Z`
       : `M${x},${barY} L${x + barW},${barY} L${x + barW},${baselineY} L${x},${baselineY} Z`;
     const roundNum = (r.label.match(/\d+/) || [])[0] || String(i + 1);
-    const tipText = `${r.label} · ${fmtDate(r.date)}\nממוצע ${r.avg.toFixed(1)} פינים למשחק`;
+    const tipText = hasData
+      ? `${r.label} · ${fmtDate(r.date)}\nממוצע ${r.avg.toFixed(1)} פינים למשחק`
+      : `${r.label} · ${fmtDate(r.date)}\nטרם שוחק`;
     // Escaped for use inside a single-quoted JS string literal embedded in an
     // HTML attribute — a raw newline there would break the inline handler
     // with a syntax error, so it has to become the two-character \n escape.
     const tipJs = tipText.replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/\n/g, '\\n');
     return `
-      <g class="chart-bar-hit" tabindex="0" role="img" aria-label="${r.label}, ${fmtDate(r.date)}, ממוצע ${r.avg.toFixed(1)} פינים למשחק"
-         onpointerenter="showRoundPinsTooltip(event, '${tipJs}')"
-         onpointermove="moveRoundPinsTooltip(event)"
-         onpointerleave="hideRoundPinsTooltip()"
-         onfocus="showRoundPinsTooltip(event, '${tipJs}')"
-         onblur="hideRoundPinsTooltip()">
+      <g class="chart-bar-hit" tabindex="0" role="img" aria-label="${r.label}, ${fmtDate(r.date)}, ${hasData ? `ממוצע ${r.avg.toFixed(1)} פינים למשחק` : 'טרם שוחק'}"
+         onpointerenter="showChartTooltip(event, '${tipJs}')"
+         onpointermove="moveChartTooltip(event)"
+         onpointerleave="hideChartTooltip()"
+         onfocus="showChartTooltip(event, '${tipJs}')"
+         onblur="hideChartTooltip()">
         <rect x="${padLeft + band * i}" y="${padTop}" width="${band}" height="${plotH}" fill="transparent"/>
         ${path ? `<path class="chart-bar" d="${path}" fill="#0EA5E9"/>` : ''}
         ${barH > 0 ? `<text x="${x + barW / 2}" y="${Math.max(padTop - 6, barY - 6)}" font-size="9.5" fill="#0C4A6E" font-weight="700" text-anchor="middle">${r.avg.toFixed(1)}</text>` : ''}
@@ -294,15 +341,173 @@ function buildRoundPinsChartHtml(rounds) {
   }).join('');
 
   return `
-    <svg viewBox="0 0 ${chartW} ${chartH}" width="${chartW}" height="${chartH}" style="display:block; direction:ltr;" direction="ltr">
+    <svg viewBox="0 0 ${chartW} ${chartH}" width="${chartW}" height="${chartH}" style="display:block; direction:ltr; margin-right:auto;" direction="ltr">
       ${gridlines}
       ${axisTitles}
       ${bars}
     </svg>`;
 }
 
-function showRoundPinsTooltip(evt, text) {
-  const el = document.getElementById('round-pins-tooltip');
+// Each team's cumulative league points across the season, round by round —
+// the standings "race" itself, not just the current snapshot the standings
+// table shows. One line per team, colored with that team's own `color`
+// (the same color used everywhere else on the page — teams/standings/the
+// per-round points table), so identity stays consistent with the rest of
+// the site rather than introducing a separate chart palette (not a
+// generated categorical scheme, so the usual CVD-pair validation doesn't
+// apply — these are the league's own pre-existing per-team colors). A
+// shared crosshair plus ONE tooltip listing every team's value at the
+// hovered round — the standard multi-line pattern (interaction.md: "one
+// tooltip, every series") — stands in for direct end-labels, which would
+// collide with this many series converging.
+function buildTeamPointsLineChartHtml(teams, rounds) {
+  if (!rounds.length || !teams.length) return `<p style="text-align:center;color:#94A3B8;padding:20px;">אין נתונים עדיין</p>`;
+  const bandW = 40, chartH = 260, padTop = 20, padBottom = 42, padLeft = 32, padRight = 10;
+  const plotH = chartH - padTop - padBottom;
+  const baselineY = padTop + plotH;
+  const chartW = Math.max(rounds.length * bandW + padLeft + padRight, 320);
+  const plotW = chartW - padLeft - padRight;
+  const maxVal = Math.max(1, ...rounds.map(r => r.cum ? Math.max(0, ...teams.map(t => r.cum[t.id] || 0)) : 0));
+  const axisMax = niceAxisMax(maxVal * 1.1);
+  const xAt = i => rounds.length > 1 ? padLeft + (plotW * i / (rounds.length - 1)) : padLeft + plotW / 2;
+  const yAt = v => baselineY - (axisMax ? (v / axisMax) * plotH : 0);
+
+  const gridlines = Array.from({ length: 5 }, (_, i) => {
+    const val = axisMax * i / 4;
+    const y = baselineY - (val / axisMax) * plotH;
+    return `<line x1="${padLeft}" y1="${y}" x2="${chartW - padRight}" y2="${y}" stroke="#E0F2FE" stroke-width="1"/>
+      <text x="2" y="${y - 3}" font-size="10" fill="#94A3B8">${compactNum(val)}</text>`;
+  }).join('');
+  const axisTitles = `
+    <text x="2" y="12" font-size="11" fill="#0369A1" font-weight="700">נק&#39; מצטבר &#8593;</text>
+    <text x="${padLeft + plotW / 2}" y="${chartH - 4}" font-size="11" fill="#0369A1" font-weight="700" text-anchor="middle">מחזור &#8594;</text>`;
+
+  // Rounds without cum data (the upcoming round-with-no-result-yet
+  // withNextRound appends) extend the axis but aren't part of the drawn
+  // line — they're always trailing, since every played round comes first.
+  const dataPoints = rounds.map((r, i) => ({ r, i })).filter(x => x.r.cum);
+  const lines = teams.map(t => {
+    const d = dataPoints.map(({ r, i }, idx) => `${idx === 0 ? 'M' : 'L'}${xAt(i)},${yAt(r.cum[t.id] || 0)}`).join(' ');
+    return `<path d="${d}" fill="none" stroke="${t.color || '#94A3B8'}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>`;
+  }).join('');
+
+  const roundTicks = rounds.map((r, i) => {
+    const roundNum = (r.label.match(/\d+/) || [])[0] || String(i + 1);
+    return `<text x="${xAt(i)}" y="${chartH - padBottom + 16}" font-size="10" fill="#64748B" text-anchor="middle">${roundNum}</text>`;
+  }).join('');
+
+  const band = plotW / rounds.length;
+  const hitBands = rounds.map((r, i) => {
+    const tipLines = r.cum
+      ? [`${r.label} · ${fmtDate(r.date)}`, ...[...teams].sort((a, b) => (r.cum[b.id] || 0) - (r.cum[a.id] || 0)).map(t => `${t.name}: ${r.cum[t.id] || 0}`)]
+      : [`${r.label} · ${fmtDate(r.date)}`, 'טרם שוחק'];
+    const tipJs = tipLines.join('\n').replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/\n/g, '\\n');
+    const x = padLeft + band * i;
+    const cx = xAt(i);
+    return `
+      <g tabindex="0" role="img" aria-label="${r.label}, ${fmtDate(r.date)}"
+         onpointerenter="showChartTooltip(event, '${tipJs}'); showCrosshair('team-points-crosshair', ${cx}, ${padTop}, ${baselineY})"
+         onpointermove="moveChartTooltip(event)"
+         onpointerleave="hideChartTooltip(); hideCrosshair('team-points-crosshair')"
+         onfocus="showChartTooltip(event, '${tipJs}'); showCrosshair('team-points-crosshair', ${cx}, ${padTop}, ${baselineY})"
+         onblur="hideChartTooltip(); hideCrosshair('team-points-crosshair')">
+        <rect x="${x}" y="${padTop}" width="${band}" height="${plotH}" fill="transparent"/>
+      </g>`;
+  }).join('');
+
+  return `
+    <svg viewBox="0 0 ${chartW} ${chartH}" width="${chartW}" height="${chartH}" style="display:block; direction:ltr; margin-right:auto;" direction="ltr">
+      ${gridlines}
+      ${axisTitles}
+      <line id="team-points-crosshair" x1="0" y1="${padTop}" x2="0" y2="${baselineY}" stroke="#94A3B8" stroke-width="1" stroke-dasharray="3,3" style="display:none;"/>
+      ${lines}
+      ${roundTicks}
+      ${hitBands}
+    </svg>`;
+}
+
+// Timeline of the all-time personal single-game record being broken — a
+// step chart (the value is flat between milestones, by definition), each
+// milestone direct-labeled with who set it (sparse enough — a handful a
+// season — that direct labels work; see marks-and-anatomy.md). The last
+// segment extends to the most recent round, since that record still stands
+// as of now. getPlayerName resolves a player id to a display name.
+function buildRecordsTimelineChartHtml(roundDatesAsc, milestones, getPlayerName) {
+  if (!milestones.length) return `<p style="text-align:center;color:#94A3B8;padding:20px;">אין נתונים עדיין</p>`;
+  const totalRounds = roundDatesAsc.length;
+  const bandW = 50, chartH = 230, padTop = 40, padBottom = 30, padLeft = 32, padRight = 10;
+  const plotH = chartH - padTop - padBottom;
+  const baselineY = padTop + plotH;
+  const chartW = Math.max(totalRounds * bandW + padLeft + padRight, 320);
+  const plotW = chartW - padLeft - padRight;
+  const maxScore = Math.max(...milestones.map(m => m.score));
+  const axisMax = niceAxisMax(maxScore * 1.1);
+  const axisMin = 0;
+  const xAt = i => totalRounds > 1 ? padLeft + (plotW * i / (totalRounds - 1)) : padLeft + plotW / 2;
+  const yAt = v => baselineY - plotH * (v - axisMin) / (axisMax - axisMin || 1);
+
+  const gridlines = Array.from({ length: 5 }, (_, i) => {
+    const val = axisMax * i / 4;
+    const y = baselineY - (val / axisMax) * plotH;
+    return `<line x1="${padLeft}" y1="${y}" x2="${chartW - padRight}" y2="${y}" stroke="#E0F2FE" stroke-width="1"/>
+      <text x="2" y="${y - 3}" font-size="10" fill="#94A3B8">${compactNum(val)}</text>`;
+  }).join('');
+  const axisTitles = `
+    <text x="2" y="12" font-size="11" fill="#0369A1" font-weight="700">ציון &#8593;</text>
+    <text x="${padLeft + plotW / 2}" y="${chartH - 4}" font-size="11" fill="#0369A1" font-weight="700" text-anchor="middle">מחזור &#8594;</text>`;
+
+  // Step path: flat at each record's score from its own round to just
+  // before the next record, then a vertical jump; the final flat segment
+  // runs out to the most recently played round.
+  let stepD = `M${xAt(milestones[0].roundIndex)},${yAt(milestones[0].score)}`;
+  milestones.forEach((m, i) => {
+    const nextX = i + 1 < milestones.length ? xAt(milestones[i + 1].roundIndex) : xAt(totalRounds - 1);
+    stepD += ` L${nextX},${yAt(m.score)}`;
+    if (i + 1 < milestones.length) stepD += ` L${nextX},${yAt(milestones[i + 1].score)}`;
+  });
+  const stepLine = `<path d="${stepD}" fill="none" stroke="#0EA5E9" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>`;
+
+  const roundTicks = roundDatesAsc.map((d, i) =>
+    `<text x="${xAt(i)}" y="${chartH - padBottom + 16}" font-size="10" fill="#64748B" text-anchor="middle">${i + 1}</text>`
+  ).join('');
+
+  const markers = milestones.map((m, i) => {
+    const cx = xAt(m.roundIndex), cy = yAt(m.score);
+    const name = getPlayerName(m.pid);
+    // Alternate the label above/below so consecutive close-together records
+    // don't stack their text on top of each other.
+    const labelY = i % 2 === 0 ? cy - 20 : cy + 26;
+    const tipText = `${name}\n${m.score} פינים · ${fmtDate(m.date)}`;
+    const tipJs = tipText.replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/\n/g, '\\n');
+    return `
+      <g tabindex="0" role="img" aria-label="${name}, ${m.score} פינים, ${fmtDate(m.date)}"
+         onpointerenter="showChartTooltip(event, '${tipJs}')"
+         onpointermove="moveChartTooltip(event)"
+         onpointerleave="hideChartTooltip()"
+         onfocus="showChartTooltip(event, '${tipJs}')"
+         onblur="hideChartTooltip()">
+        <circle cx="${cx}" cy="${cy}" r="12" fill="transparent"/>
+        <circle cx="${cx}" cy="${cy}" r="5" fill="#0EA5E9" stroke="#fff" stroke-width="2"/>
+        <text x="${cx}" y="${labelY}" font-size="9.5" fill="#0C4A6E" font-weight="700" text-anchor="middle">${name}</text>
+        <text x="${cx}" y="${labelY + 11}" font-size="9.5" fill="#0369A1" text-anchor="middle">${m.score}</text>
+      </g>`;
+  }).join('');
+
+  return `
+    <svg viewBox="0 0 ${chartW} ${chartH}" width="${chartW}" height="${chartH}" style="display:block; direction:ltr; margin-right:auto;" direction="ltr">
+      ${gridlines}
+      ${axisTitles}
+      ${stepLine}
+      ${roundTicks}
+      ${markers}
+    </svg>`;
+}
+
+// Shared across every chart on the page (bar, line, scatter) — only one
+// tooltip can be showing at a time, so one fixed-position element/function
+// set does for all of them instead of duplicating this per chart.
+function showChartTooltip(evt, text) {
+  const el = document.getElementById('chart-tooltip');
   if (!el) return;
   el.innerHTML = '';
   text.split('\n').forEach((line, i) => {
@@ -311,12 +516,12 @@ function showRoundPinsTooltip(evt, text) {
     el.appendChild(row);
   });
   el.style.display = 'block';
-  moveRoundPinsTooltip(evt);
+  moveChartTooltip(evt);
 }
-function moveRoundPinsTooltip(evt) {
-  const el = document.getElementById('round-pins-tooltip');
+function moveChartTooltip(evt) {
+  const el = document.getElementById('chart-tooltip');
   if (!el || el.style.display === 'none') return;
-  // Keyboard focus carries no pointer coordinates — anchor to the bar's own
+  // Keyboard focus carries no pointer coordinates — anchor to the mark's own
   // position on screen instead.
   let px = evt.clientX, py = evt.clientY;
   if (px == null && evt.target && evt.target.getBoundingClientRect) {
@@ -326,20 +531,37 @@ function moveRoundPinsTooltip(evt) {
   }
   const pad = 14;
   let x = px + pad, y = py + pad;
-  if (x + 180 > window.innerWidth) x = px - 180 - pad;
-  if (y + 60 > window.innerHeight) y = py - 60 - pad;
+  if (x + 220 > window.innerWidth) x = px - 220 - pad;
+  if (y + 100 > window.innerHeight) y = py - 100 - pad;
   el.style.left = x + 'px';
   el.style.top = y + 'px';
 }
-function hideRoundPinsTooltip() {
-  const el = document.getElementById('round-pins-tooltip');
+function hideChartTooltip() {
+  const el = document.getElementById('chart-tooltip');
   if (el) el.style.display = 'none';
 }
-function toggleRoundPinsView(view) {
-  document.getElementById('round-pins-chart-wrap').style.display = view === 'chart' ? '' : 'none';
-  document.getElementById('round-pins-table-wrap').style.display = view === 'table' ? '' : 'none';
-  document.getElementById('round-pins-btn-chart').setAttribute('aria-pressed', String(view === 'chart'));
-  document.getElementById('round-pins-btn-table').setAttribute('aria-pressed', String(view === 'table'));
+// A vertical hairline that snaps to the hovered/focused round on a line
+// chart — the crosshair finds the X, per interaction.md, instead of making
+// the reader aim at a 2px line.
+function showCrosshair(id, x, y1, y2) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.setAttribute('x1', x); el.setAttribute('x2', x);
+  el.setAttribute('y1', y1); el.setAttribute('y2', y2);
+  el.style.display = '';
+}
+function hideCrosshair(id) {
+  const el = document.getElementById(id);
+  if (el) el.style.display = 'none';
+}
+// Generic chart/table toggle — id-prefix lets every chart card reuse it
+// instead of a bespoke toggle function each (see id pattern below: each
+// chart card has "<prefix>-chart-wrap" / "-table-wrap" / "-btn-chart" / "-btn-table").
+function toggleChartView(prefix, view) {
+  document.getElementById(prefix + '-chart-wrap').style.display = view === 'chart' ? '' : 'none';
+  document.getElementById(prefix + '-table-wrap').style.display = view === 'table' ? '' : 'none';
+  document.getElementById(prefix + '-btn-chart').setAttribute('aria-pressed', String(view === 'chart'));
+  document.getElementById(prefix + '-btn-table').setAttribute('aria-pressed', String(view === 'table'));
 }
 
 // Teams excluded from the team competition (currently just פייסרים) never
@@ -452,6 +674,21 @@ function roundPointsFor(DB, dateStr) {
   if (method !== 'roundRobin' && method !== 'pinsLadder') return null;
   const roundDB = { ...DB, results: DB.results.filter(r => r.date === dateStr) };
   return method === 'roundRobin' ? computeRoundRobinTeamPoints(roundDB) : computePinsLadderTeamPoints(roundDB);
+}
+
+// Points every team earned for ONE round, whichever scoring method is
+// active — wraps roundPointsFor (alt methods) with the standard method's
+// own pairwise teamAPoints/teamBPoints, so callers don't need to branch on
+// DB.settings.scoringMethod themselves.
+function teamPointsForRound(DB, dateStr) {
+  const alt = roundPointsFor(DB, dateStr);
+  if (alt) return alt;
+  const pts = {};
+  DB.results.filter(r => !r.isPractice && r.date === dateStr).forEach(r => {
+    pts[r.teamAId] = (pts[r.teamAId] || 0) + (r.teamAPoints || 0);
+    if (r.teamBId) pts[r.teamBId] = (pts[r.teamBId] || 0) + (r.teamBPoints || 0);
+  });
+  return pts;
 }
 
 // Handicap for the public roster view — mirrors admin.html's
@@ -665,6 +902,7 @@ function renderContent(DB) {
       <div class="tab" data-tab="teams" onclick="switchTab('teams')">&#x1F465; קבוצות</div>
       <div class="tab" data-tab="schedule" onclick="switchTab('schedule')">&#x1F4C5; משחקים קרובים</div>
       <div class="tab" data-tab="results" onclick="switchTab('results')">&#x1F3AF; תוצאות אחרונות</div>
+      <div class="tab" data-tab="charts" onclick="switchTab('charts')">&#x1F4CA; ניתוח גרפי</div>
     </div>
 
     <div class="section active" id="section-standings">
@@ -749,18 +987,8 @@ function renderContent(DB) {
               const roundDates = [...new Set(leagueResults.map(r => r.date))].sort();
               const teamsForTable = schedulableTeams(DB);
               if (!roundDates.length) return `<tr><td colspan="${teamsForTable.length + 1}" style="text-align:center;color:#94A3B8;">אין נתונים עדיין</td></tr>`;
-              const method = DB.settings && DB.settings.scoringMethod;
               return roundDates.map(d => {
-                let pts;
-                if (method === 'roundRobin' || method === 'pinsLadder') {
-                  pts = roundPointsFor(DB, d) || {};
-                } else {
-                  pts = {};
-                  leagueResults.filter(r => r.date === d).forEach(r => {
-                    pts[r.teamAId] = (pts[r.teamAId] || 0) + (r.teamAPoints || 0);
-                    if (r.teamBId) pts[r.teamBId] = (pts[r.teamBId] || 0) + (r.teamBPoints || 0);
-                  });
-                }
+                const pts = teamPointsForRound(DB, d);
                 const roundLabel = (DB.schedule.find(s => s.date === d && s.round) || {}).round || fmtDate(d);
                 const cells = teamsForTable.map(t => `<td style="text-align:center;">${pts[t.id] != null ? pts[t.id] : '—'}</td>`).join('');
                 return `<tr><td>${roundLabel}<br><span style="font-size:11px;color:#94A3B8;">${fmtDate(d)}</span></td>${cells}</tr>`;
@@ -768,35 +996,6 @@ function renderContent(DB) {
             })()}
           </tbody>
         </table></div>
-      </div>
-      <div class="card">
-        ${(() => {
-          const roundDates = [...resultRoundDates].reverse();
-          const rounds = roundDates.map(d => ({
-            date: d,
-            label: (DB.schedule.find(s => s.date === d && s.round) || {}).round || fmtDate(d),
-            avg: avgPinsForRound(DB, d)
-          }));
-          return `
-          <div style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:8px; margin-bottom:14px;">
-            <h2 style="margin-bottom:0;">&#x1F4C8; ממוצע פינים למשחק, לפי מחזור — כל השחקנים יחד</h2>
-            <div role="group" aria-label="תצוגה">
-              <button type="button" id="round-pins-btn-chart" class="chart-toggle-btn" aria-pressed="true" onclick="toggleRoundPinsView('chart')">גרף</button>
-              <button type="button" id="round-pins-btn-table" class="chart-toggle-btn" aria-pressed="false" onclick="toggleRoundPinsView('table')">טבלה</button>
-            </div>
-          </div>
-          <p style="font-size:12px; color:#94A3B8; margin-bottom:10px;">ממוצע פינים גולמי (ללא הנדיקפ) למשחק בודד, על פני כל השחקנים במחזור — משחקי קבוצות ותרגול פייסרים יחד. מחושב לפי משחק (לא לפי שחקן), כך שמספר המשתתפים במחזור לא משפיע על הממוצע.</p>
-          <div id="round-pins-chart-wrap" class="chart-wrap">${buildRoundPinsChartHtml(rounds)}</div>
-          <div id="round-pins-table-wrap" class="table-wrap" style="display:none;">
-            <table>
-              <thead><tr><th>מחזור</th><th>תאריך</th><th>ממוצע פינים למשחק</th></tr></thead>
-              <tbody>
-                ${rounds.length ? rounds.map(r => `<tr><td>${r.label}</td><td>${fmtDate(r.date)}</td><td>${r.avg.toFixed(1)}</td></tr>`).join('') : `<tr><td colspan="3" style="text-align:center;color:#94A3B8;">אין נתונים עדיין</td></tr>`}
-              </tbody>
-            </table>
-          </div>
-          <div id="round-pins-tooltip" class="chart-tooltip"></div>`;
-        })()}
       </div>
       <div class="card">
         <h2>&#x1F3AF; שיא אישי למשחק בודד</h2>
@@ -931,6 +1130,100 @@ function renderContent(DB) {
       </div>` : ''}
       <div id="results-cards">${buildResultCardsHtml(resultRoundDates[0] || null)}</div>
     </div>
+
+    <div class="section" id="section-charts">
+      <div class="card">
+        ${(() => {
+          const roundDates = [...resultRoundDates].reverse();
+          const playedSet = new Set(roundDates);
+          const rounds = withNextRound(DB, roundDates).map(d => ({
+            date: d,
+            label: (DB.schedule.find(s => s.date === d && s.round) || {}).round || fmtDate(d),
+            avg: playedSet.has(d) ? avgPinsForRound(DB, d) : null
+          }));
+          return `
+          <div style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:8px; margin-bottom:14px;">
+            <h2 style="margin-bottom:0;">&#x1F4C8; ממוצע פינים למשחק, לפי מחזור — כל השחקנים יחד</h2>
+            <div role="group" aria-label="תצוגה">
+              <button type="button" id="round-pins-btn-chart" class="chart-toggle-btn" aria-pressed="true" onclick="toggleChartView('round-pins', 'chart')">גרף</button>
+              <button type="button" id="round-pins-btn-table" class="chart-toggle-btn" aria-pressed="false" onclick="toggleChartView('round-pins', 'table')">טבלה</button>
+            </div>
+          </div>
+          <p style="font-size:12px; color:#94A3B8; margin-bottom:10px;">ממוצע פינים גולמי (ללא הנדיקפ) למשחק בודד, על פני כל השחקנים במחזור — משחקי קבוצות ותרגול פייסרים יחד. מחושב לפי משחק (לא לפי שחקן), כך שמספר המשתתפים במחזור לא משפיע על הממוצע.</p>
+          <div id="round-pins-chart-wrap" class="chart-wrap">${buildRoundPinsChartHtml(rounds)}</div>
+          <div id="round-pins-table-wrap" class="table-wrap" style="display:none;">
+            <table>
+              <thead><tr><th>מחזור</th><th>תאריך</th><th>ממוצע פינים למשחק</th></tr></thead>
+              <tbody>
+                ${rounds.length ? rounds.map(r => `<tr><td>${r.label}</td><td>${fmtDate(r.date)}</td><td>${r.avg != null ? r.avg.toFixed(1) : '—'}</td></tr>`).join('') : `<tr><td colspan="3" style="text-align:center;color:#94A3B8;">אין נתונים עדיין</td></tr>`}
+              </tbody>
+            </table>
+          </div>`;
+        })()}
+      </div>
+      <div class="card">
+        ${(() => {
+          const teamsForChart = schedulableTeams(DB);
+          const roundDatesAsc = [...new Set(leagueResults.map(r => r.date))].sort();
+          const playedSet = new Set(roundDatesAsc);
+          const cum = {};
+          teamsForChart.forEach(t => { cum[t.id] = 0; });
+          const roundsForChart = withNextRound(DB, roundDatesAsc).map(d => {
+            const label = (DB.schedule.find(s => s.date === d && s.round) || {}).round || fmtDate(d);
+            if (!playedSet.has(d)) return { date: d, label, cum: null };
+            const pts = teamPointsForRound(DB, d);
+            teamsForChart.forEach(t => { cum[t.id] = (cum[t.id] || 0) + (pts[t.id] || 0); });
+            return { date: d, label, cum: { ...cum } };
+          });
+          return `
+          <div style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:8px; margin-bottom:14px;">
+            <h2 style="margin-bottom:0;">&#x1F4C8; מגמת נקודות קבוצתית לאורך העונה</h2>
+            <div role="group" aria-label="תצוגה">
+              <button type="button" id="team-points-btn-chart" class="chart-toggle-btn" aria-pressed="true" onclick="toggleChartView('team-points', 'chart')">גרף</button>
+              <button type="button" id="team-points-btn-table" class="chart-toggle-btn" aria-pressed="false" onclick="toggleChartView('team-points', 'table')">טבלה</button>
+            </div>
+          </div>
+          <p style="font-size:12px; color:#94A3B8; margin-bottom:10px;">נקודות ליגה מצטברות לכל קבוצה, מחזור אחרי מחזור. ריחוף או פוקוס על מחזור מציג את הערכים של כל הקבוצות באותה נקודה.</p>
+          <div id="team-points-chart-wrap" class="chart-wrap">${buildTeamPointsLineChartHtml(teamsForChart, roundsForChart)}</div>
+          <div style="display:flex; flex-wrap:wrap; gap:2px 12px; margin-top:10px;">${teamsForChart.map(t => `<span style="display:inline-flex; align-items:center; gap:4px; font-size:12px; color:#0C4A6E;"><span class="color-dot" style="background:${t.color || '#94A3B8'}"></span>${t.name}</span>`).join('')}</div>
+          <div id="team-points-table-wrap" class="table-wrap" style="display:none; margin-top:10px;">
+            <table>
+              <thead><tr><th>מחזור</th>${teamsForChart.map(t => `<th style="text-align:center;"><span class="color-dot" style="background:${t.color || '#94A3B8'}"></span>${t.name}</th>`).join('')}</tr></thead>
+              <tbody>
+                ${roundsForChart.length ? roundsForChart.map(r => `<tr><td>${r.label}</td>${teamsForChart.map(t => `<td style="text-align:center;">${r.cum ? (r.cum[t.id] || 0) : '—'}</td>`).join('')}</tr>`).join('') : `<tr><td colspan="${teamsForChart.length + 1}" style="text-align:center;color:#94A3B8;">אין נתונים עדיין</td></tr>`}
+              </tbody>
+            </table>
+          </div>`;
+        })()}
+      </div>
+      <div class="card">
+        ${(() => {
+          const roundDatesAsc = [...new Set(DB.results.filter(r => r.date).map(r => r.date))].sort();
+          const milestones = recordMilestones(DB, roundDatesAsc);
+          const roundDatesExtended = withNextRound(DB, roundDatesAsc);
+          return `
+          <div style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:8px; margin-bottom:14px;">
+            <h2 style="margin-bottom:0;">&#x23F1;&#xFE0F; שיאים אישיים לאורך הזמן</h2>
+            <div role="group" aria-label="תצוגה">
+              <button type="button" id="records-btn-chart" class="chart-toggle-btn" aria-pressed="true" onclick="toggleChartView('records', 'chart')">גרף</button>
+              <button type="button" id="records-btn-table" class="chart-toggle-btn" aria-pressed="false" onclick="toggleChartView('records', 'table')">טבלה</button>
+            </div>
+          </div>
+          <p style="font-size:12px; color:#94A3B8; margin-bottom:10px;">כל פעם שהשיא האישי למשחק בודד (כל השחקנים, כולל תרגול פייסרים) נשבר — מתי וע"י מי.</p>
+          <div id="records-chart-wrap" class="chart-wrap">${buildRecordsTimelineChartHtml(roundDatesExtended, milestones, playerName)}</div>
+          <div id="records-table-wrap" class="table-wrap" style="display:none;">
+            <table>
+              <thead><tr><th>#</th><th>שחקן</th><th>ציון</th><th>תאריך</th></tr></thead>
+              <tbody>
+                ${milestones.length ? milestones.map((m, i) => `<tr><td>${i + 1}</td><td>${playerName(m.pid)}</td><td><strong>${m.score}</strong></td><td>${fmtDate(m.date)}</td></tr>`).join('') : `<tr><td colspan="4" style="text-align:center;color:#94A3B8;">אין נתונים עדיין</td></tr>`}
+              </tbody>
+            </table>
+          </div>`;
+        })()}
+      </div>
+    </div>
+
+    <div id="chart-tooltip" class="chart-tooltip"></div>
   `;
 }
 
