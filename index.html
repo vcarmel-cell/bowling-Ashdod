@@ -64,6 +64,17 @@ header p { font-size: 13px; color: #7DD3FC; margin-top: 4px; }
   border: 1px solid #BAE6FD; border-radius: 8px; padding: 5px 10px; cursor: pointer;
 }
 .chart-toggle-btn:hover { background: #E0F2FE; }
+.ask-btn {
+  font-size: 14px; font-weight: 700; color: #fff;
+  background: linear-gradient(135deg, #0EA5E9, #0284C7); border: none;
+  border-radius: 8px; padding: 9px 18px; cursor: pointer;
+}
+.ask-btn:hover { filter: brightness(1.05); }
+.qa-chip {
+  font-size: 13px; font-weight: 600; color: #0369A1; background: #F0F9FF;
+  border: 1.5px solid #BAE6FD; border-radius: 20px; padding: 6px 14px; cursor: pointer;
+}
+.qa-chip:hover { background: #E0F2FE; }
 table { width: 100%; border-collapse: collapse; }
 th {
   background: #F0F9FF; text-align: right; padding: 10px 12px; font-size: 13px;
@@ -118,8 +129,10 @@ footer { text-align: center; padding: 20px; color: #7DD3FC; font-size: 12px; }
 // ─── CONFIGURE YOUR FIREBASE PROJECT HERE ───────────────────────
 // Use the exact same Firebase Config you pasted into admin.html's
 // setup screen (Firebase console → Project settings → Your apps).
-// This page only *reads* data (Firestore rules restrict writes to
-// authenticated admin devices), so it's safe to keep this public.
+// This page mostly *reads* data (Firestore rules require authentication for
+// any write, same as admin.html) — the one exception is saveAskedQuestion()
+// below, which anonymously signs this page in too, purely to log what
+// visitors type into the "שאל שאלה" box for admin.html to review later.
 const FIREBASE_CONFIG = {
   apiKey: "AIzaSyBzP45MyGTnrnrlbj4jOiGWDpjDBNVUSpQ",
   authDomain: "bowling-leage.firebaseapp.com",
@@ -128,6 +141,9 @@ const FIREBASE_CONFIG = {
   messagingSenderId: "3652484366",
   appId: "1:3652484366:web:79bb952c34628313c8ab5f"
 };
+// Set once in boot(); reused by saveAskedQuestion() so it doesn't need its
+// own Firestore handle.
+let fdb = null;
 
 function fmtDate(d) {
   if (!d) return '—';
@@ -147,9 +163,11 @@ function loadFirebaseSDK() {
       document.head.appendChild(s);
     }
     load('https://www.gstatic.com/firebasejs/9.22.2/firebase-app-compat.js', () =>
-      load('https://www.gstatic.com/firebasejs/9.22.2/firebase-firestore-compat.js', () => {
-        clearTimeout(timer); resolve(true);
-      })
+      load('https://www.gstatic.com/firebasejs/9.22.2/firebase-firestore-compat.js', () =>
+        load('https://www.gstatic.com/firebasejs/9.22.2/firebase-auth-compat.js', () => {
+          clearTimeout(timer); resolve(true);
+        })
+      )
     );
   });
 }
@@ -714,6 +732,13 @@ function computeHandicap(DB, playerId, playerStats) {
 // page re-render or a module-level copy of DB.
 let renderResultsForDate = null;
 
+// Set inside renderContent() each render — a small pattern-matching Q&A
+// over the already-computed stats (no AI, no backend: a free-text box that
+// hits a real API would need a server-side key, which can't live safely in
+// a public page). Recognizes a fixed set of question shapes; anything else
+// gets a fallback listing what it does understand.
+let answerDataQuestion = null;
+
 function renderContent(DB) {
   const el = document.getElementById('content');
 
@@ -895,6 +920,89 @@ function renderContent(DB) {
     }).join('') : `<div class="card"><p style="text-align:center;color:#94A3B8;">אין תוצאות עדיין</p></div>`;
   }
   renderResultsForDate = buildResultCardsHtml;
+
+  answerDataQuestion = function(qRaw) {
+    // matched=true for every branch below except the final catch-all, even
+    // when a lookup inside the branch comes up empty (e.g. an unknown
+    // player name) — the question's SHAPE was still understood, which is
+    // the useful signal for saveAskedQuestion()'s log.
+    function reply(text, matched) { return { text, matched: matched !== false }; }
+
+    const q = (qRaw || '').trim();
+    if (!q) return reply('נא להקליד שאלה.');
+    // Strip punctuation so "מי מוביל?" and "מי מוביל" match the same way.
+    const norm = q.replace(/[?!.,;:״"]/g, ' ').replace(/\s+/g, ' ').trim();
+
+    function findPlayer(fragment) {
+      const f = (fragment || '').trim();
+      return f ? DB.players.find(p => p.name && p.name.includes(f)) || null : null;
+    }
+    function findTeam(fragment) {
+      const f = (fragment || '').trim();
+      return f ? DB.teams.find(t => t.name && t.name.includes(f)) || null : null;
+    }
+
+    // Team leader
+    if (/^מי (מוביל|ראשון|בפסגה|בראש)/.test(norm) && !/שחקן|שחקנית|אישי/.test(norm)) {
+      if (!teamStandings.length) return reply('עדיין אין נתוני דירוג קבוצתי.');
+      const l = teamStandings[0];
+      return reply(`הקבוצה המובילה היא ${l.team.name}, עם ${l.points} נקודות ליגה ו-${l.pins} פינים.`);
+    }
+
+    // Best player by average
+    if (/מי (ה)?שחקן(ית)?.*(הכי טוב|מוביל|הממוצע הגבוה)|מי מוביל בממוצע/.test(norm)) {
+      if (!playerStandings.length) return reply('עדיין אין נתוני דירוג אישי.');
+      const l = playerStandings[0];
+      return reply(`השחקן המוביל בממוצע הוא ${l.player.name}, עם ממוצע ${l.avg.toFixed(2)} (${l.games} משחקים).`);
+    }
+
+    // Personal average lookup: "מה הממוצע של X" / "כמה ממוצע יש ל-X"
+    let m = norm.match(/(?:מה הממוצע (?:האישי )?של|כמה ממוצע יש ל)\s*(.+)/);
+    if (m) {
+      const p = findPlayer(m[1]);
+      if (!p) return reply(`לא מצאתי שחקן בשם "${m[1].trim()}".`);
+      const st = playerStandings.find(s => s.player.id === p.id);
+      if (!st) return reply(`ל${p.name} אין עדיין משחקים רשומים.`);
+      return reply(`הממוצע של ${p.name} הוא ${st.avg.toFixed(2)}, על סמך ${st.games} משחקים (ציון גבוה: ${st.high}).`);
+    }
+
+    // Team standing lookup: "כמה נקודות יש ל-X" / "מה המצב של קבוצת X" / "באיזה מקום X"
+    m = norm.match(/(?:כמה נקודות יש ל|מה המצב של(?: קבוצת)?|באיזה מקום (?:נמצאת|נמצא))\s*(.+)/);
+    if (m) {
+      const t = findTeam(m[1]);
+      if (!t) return reply(`לא מצאתי קבוצה בשם "${m[1].trim()}".`);
+      const idx = teamStandings.findIndex(s => s.team.id === t.id);
+      if (idx === -1) return reply(`לקבוצת ${t.name} אין עדיין משחקים רשומים.`);
+      const s = teamStandings[idx];
+      return reply(`${t.name} נמצאת במקום ${idx + 1} מתוך ${teamStandings.length}, עם ${s.points} נקודות ו-${s.pins} פינים.`);
+    }
+
+    // All-time single-game record
+    if (/שיא(?! קבוצתי)|הציון הכי גבוה|מי שבר את השיא/.test(norm)) {
+      if (!topSingleGames.length) return reply('עדיין אין שיאים רשומים.');
+      const r = topSingleGames[0];
+      return reply(`השיא האישי למשחק בודד הוא ${r.score} פינים, של ${playerName(r.pid)}, בתאריך ${fmtDate(r.date)}.`);
+    }
+
+    // Next round
+    if (/מתי (ה)?(משחק|מחזור) הבא/.test(norm)) {
+      if (!upcoming.length) return reply('אין כרגע משחקים מתוכננים בלוח.');
+      return reply(`המחזור הבא הוא ב-${fmtDate(upcoming[0].date)}.`);
+    }
+
+    // Last round results
+    if (/(מה (היה|קרה) ב|תוצאות ה|מי ניצח ב).*מחזור האחרון/.test(norm)) {
+      if (!lastRoundResults.length) return reply('עדיין אין תוצאות.');
+      const lines = lastRoundResults.map(r => `${teamName(r.teamAId)} נגד ${teamName(r.teamBId)}`);
+      return reply(`במחזור האחרון (${fmtDate(latestDate)}) שוחקו: ${lines.join(', ')}.`);
+    }
+
+    // Simple counts
+    if (/כמה קבוצות/.test(norm)) return reply(`יש ${schedulableTeams(DB).length} קבוצות בתחרות הקבוצתית.`);
+    if (/כמה שחקנים/.test(norm)) return reply(`רשומים ${DB.players.length} שחקנים בליגה.`);
+
+    return reply('לא הצלחתי להבין את השאלה. אפשר לנסות למשל: "מי מוביל?", "מה הממוצע של [שם שחקן]?", "מה השיא האישי?", "מתי המחזור הבא?", "כמה נקודות יש ל[קבוצה]?".', false);
+  };
 
   el.innerHTML = `
     <div class="tabs">
@@ -1133,6 +1241,25 @@ function renderContent(DB) {
 
     <div class="section" id="section-charts">
       <div class="card">
+        <h2>&#x1F4AC; שאל שאלה על הנתונים</h2>
+        <p style="font-size:12px; color:#94A3B8; margin-bottom:10px;">אפשר ללחוץ על אחת מהשאלות המוכנות, או להקליד שאלה חופשית בניסוח דומה.</p>
+        <div style="display:flex; gap:6px; flex-wrap:wrap; margin-bottom:12px;">
+          <button type="button" class="qa-chip" onclick="askPresetQuestion('מי מוביל?')">מי מוביל?</button>
+          <button type="button" class="qa-chip" onclick="askPresetQuestion('מי השחקן הכי טוב?')">מי השחקן הכי טוב?</button>
+          <button type="button" class="qa-chip" onclick="askPresetQuestion('מה השיא האישי?')">מה השיא האישי?</button>
+          <button type="button" class="qa-chip" onclick="askPresetQuestion('מתי המחזור הבא?')">מתי המחזור הבא?</button>
+          <button type="button" class="qa-chip" onclick="askPresetQuestion('מה היה במחזור האחרון?')">מה היה במחזור האחרון?</button>
+          <button type="button" class="qa-chip" onclick="askPresetQuestion('כמה קבוצות יש?')">כמה קבוצות יש?</button>
+          <button type="button" class="qa-chip" onclick="askPresetQuestion('מה הממוצע של ', false)">מה הממוצע של... &#x270F;&#xFE0F;</button>
+          <button type="button" class="qa-chip" onclick="askPresetQuestion('כמה נקודות יש ל', false)">כמה נקודות יש ל... &#x270F;&#xFE0F;</button>
+        </div>
+        <div style="display:flex; gap:8px; flex-wrap:wrap;">
+          <input type="text" id="data-question-input" placeholder="או הקלד שאלה חופשית..." onkeydown="if(event.key==='Enter'){event.preventDefault();askDataQuestion();}" style="flex:1; min-width:200px; padding:9px 12px; border-radius:8px; border:1.5px solid #BAE6FD; font-family:inherit; font-size:14px; color:#0C4A6E;">
+          <button type="button" class="ask-btn" onclick="askDataQuestion()">&#x1F50D; שאל</button>
+        </div>
+        <div id="data-question-answer" style="margin-top:12px; font-size:14px; color:#0C4A6E; background:#F0F9FF; border-radius:8px; padding:10px 12px; display:none;"></div>
+      </div>
+      <div class="card">
         ${(() => {
           const roundDates = [...resultRoundDates].reverse();
           const playedSet = new Set(roundDates);
@@ -1237,6 +1364,52 @@ function switchTab(name) {
   document.querySelectorAll('.section').forEach(s => s.classList.toggle('active', s.id === 'section-' + name));
 }
 
+function askDataQuestion() {
+  const input = document.getElementById('data-question-input');
+  const out = document.getElementById('data-question-answer');
+  if (!input || !out) return;
+  const q = input.value;
+  if (!q.trim()) { out.style.display = 'none'; return; }
+  const result = answerDataQuestion ? answerDataQuestion(q) : { text: 'הנתונים עדיין נטענים — נסה שוב בעוד רגע.', matched: false };
+  out.textContent = result.text;
+  out.style.display = 'block';
+  saveAskedQuestion(q, result.text, result.matched);
+}
+
+// Logs every question asked (preset or free-typed) to Firestore, purely so
+// admin.html can review what visitors are asking — never blocks or shows
+// an error to the visitor if it fails; this is a background nicety, not
+// something the Q&A feature depends on. Signs this page in anonymously on
+// first use (lazy — most visits never touch this box, so there's no reason
+// to authenticate on every page load just for this).
+async function saveAskedQuestion(question, answerText, matched) {
+  if (!fdb || typeof firebase === 'undefined') return;
+  try {
+    if (!firebase.auth().currentUser) await firebase.auth().signInAnonymously();
+    const id = 'q_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+    await fdb.collection('dataQuestions').doc(id).set({
+      id, question, answer: answerText, matched: !!matched,
+      createdAt: new Date().toISOString()
+    });
+  } catch (e) {
+    console.warn('saveAskedQuestion:', e.message);
+  }
+}
+
+// Fills the question box from one of the preset chips. autoAsk (default
+// true) answers immediately; the two "...✏️" templates pass false instead,
+// since they need a name/team typed in before they mean anything — the box
+// is filled and focused so the visitor just continues typing.
+function askPresetQuestion(q, autoAsk) {
+  const input = document.getElementById('data-question-input');
+  if (!input) return;
+  input.value = q;
+  input.focus();
+  input.setSelectionRange(q.length, q.length);
+  if (autoAsk !== false) askDataQuestion();
+  else document.getElementById('data-question-answer').style.display = 'none';
+}
+
 async function boot() {
   document.getElementById('footer-year').textContent = new Date().getFullYear();
 
@@ -1258,7 +1431,7 @@ async function boot() {
 
   try {
     if (!firebase.apps.length) firebase.initializeApp(FIREBASE_CONFIG);
-    const fdb = firebase.firestore();
+    fdb = firebase.firestore();
     const [t, p, s, r, cfg] = await Promise.all([
       fdb.collection('teams').get(),
       fdb.collection('players').get(),

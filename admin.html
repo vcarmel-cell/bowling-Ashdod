@@ -223,6 +223,7 @@ input[type="number"].score-input { text-align: center; padding: 8px 4px; font-we
       <a onclick="showPage('results')" id="nav-results"><span class="icon">&#x1F3AF;</span><span>תוצאות</span></a>
       <a onclick="showPage('practice')" id="nav-practice"><span class="icon">&#x1F3B3;</span><span>ניקוד אישי</span></a>
       <a onclick="showPage('standings')" id="nav-standings"><span class="icon">&#x1F3C6;</span><span>דירוג וסטטיסטיקות</span></a>
+      <a onclick="showPage('questions')" id="nav-questions"><span class="icon">&#x1F4AC;</span><span>שאלות מבקרים</span></a>
       <a onclick="showPage('settings')" id="nav-settings"><span class="icon">&#x2699;&#xFE0F;</span><span>הגדרות</span></a>
     </div>
     <div class="sidebar-footer">ליגת באולינג &copy; <span id="footer-year"></span></div>
@@ -364,6 +365,18 @@ input[type="number"].score-input { text-align: center; padding: 8px 4px; font-we
           <tbody id="standings-players-tbody"></tbody>
         </table></div>
       </div>
+    </div>
+
+    <!-- VISITOR QUESTIONS -->
+    <div id="page-questions" class="page">
+      <div class="page-header">
+        <div><h1>&#x1F4AC; שאלות מבקרים</h1><p>שאלות שהוקלדו בתיבת "שאל שאלה על הנתונים" בדף הציבור (כולל לחיצות על שאלות מוכנות)</p></div>
+        <button class="btn btn-secondary" onclick="renderVisitorQuestions()">&#x1F504; רענן</button>
+      </div>
+      <div class="card"><div class="table-wrap"><table>
+        <thead><tr><th>תאריך ושעה</th><th>שאלה</th><th>תשובה שניתנה</th><th>זוהתה?</th><th></th></tr></thead>
+        <tbody id="questions-tbody"><tr><td colspan="5" style="text-align:center; color:#94A3B8;">פתח את העמוד כדי לטעון</td></tr></tbody>
+      </table></div></div>
     </div>
 
     <!-- SETTINGS -->
@@ -1033,6 +1046,7 @@ const RENDERERS = {
   results: renderResults,
   practice: renderPracticePage,
   standings: renderStandings,
+  questions: renderVisitorQuestions,
   settings: renderSettings,
   'result-entry': null
 };
@@ -3180,6 +3194,41 @@ function renderStandings() {
       <td>${s.high}</td>
     </tr>
   `).join('') || '<tr><td colspan="6" style="text-align:center; color:#94A3B8;">אין נתונים עדיין</td></tr>';
+}
+
+// Not part of the main DB sync cycle (teams/players/schedule/results) —
+// visitors write these directly from the public page (see index.html's
+// saveAskedQuestion), so it's fetched fresh on demand instead of being
+// folded into dbLoadRemote()'s reconcile logic, which exists to protect
+// the league's own core data, not a passive activity log.
+async function renderVisitorQuestions() {
+  const tbody = document.getElementById('questions-tbody');
+  if (!tbody) return;
+  if (!fdb) { tbody.innerHTML = '<tr><td colspan="5" style="text-align:center; color:#94A3B8;">אין חיבור לענן כרגע</td></tr>'; return; }
+  tbody.innerHTML = '<tr><td colspan="5" style="text-align:center; color:#94A3B8;">טוען...</td></tr>';
+  try {
+    const snap = await fdb.collection('dataQuestions').orderBy('createdAt', 'desc').limit(300).get();
+    const rows = snap.docs.map(d => d.data());
+    tbody.innerHTML = rows.map(q => {
+      const when = q.createdAt ? new Date(q.createdAt).toLocaleString('he-IL') : '—';
+      const badge = q.matched ? '<span class="badge badge-green">זוהתה</span>' : '<span class="badge badge-yellow">לא זוהתה</span>';
+      return `<tr>
+        <td style="white-space:nowrap;">${when}</td>
+        <td>${q.question || ''}</td>
+        <td>${q.answer || ''}</td>
+        <td>${badge}</td>
+        <td><button class="btn btn-danger btn-sm" onclick="deleteVisitorQuestion('${q.id}')">מחק</button></td>
+      </tr>`;
+    }).join('') || '<tr><td colspan="5" style="text-align:center; color:#94A3B8;">אין שאלות עדיין</td></tr>';
+  } catch (e) {
+    tbody.innerHTML = `<tr><td colspan="5" style="text-align:center; color:#EF4444;">שגיאה בטעינה: ${e.message}</td></tr>`;
+  }
+}
+
+function deleteVisitorQuestion(id) {
+  confirmAction('מחיקת שאלה', 'למחוק את השאלה הזו מהרשימה?', () => {
+    fbDel('dataQuestions', id).then(() => renderVisitorQuestions()).catch(e => toast('שגיאה במחיקה: ' + e.message));
+  });
 }
 
 // Pushes everything currently held in the local cache up to Firestore,
