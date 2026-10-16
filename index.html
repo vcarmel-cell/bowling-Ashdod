@@ -942,18 +942,22 @@ function renderContent(DB) {
       return f ? DB.teams.find(t => t.name && t.name.includes(f)) || null : null;
     }
 
-    // Team leader
-    if (/^מי (מוביל|ראשון|בפסגה|בראש)/.test(norm) && !/שחקן|שחקנית|אישי/.test(norm)) {
-      if (!teamStandings.length) return reply('עדיין אין נתוני דירוג קבוצתי.');
-      const l = teamStandings[0];
-      return reply(`הקבוצה המובילה היא ${l.team.name}, עם ${l.points} נקודות ליגה ו-${l.pins} פינים.`);
-    }
-
-    // Best player by average
-    if (/מי (ה)?שחקן(ית)?.*(הכי טוב|מוביל|הממוצע הגבוה)|מי מוביל בממוצע/.test(norm)) {
-      if (!playerStandings.length) return reply('עדיין אין נתוני דירוג אישי.');
-      const l = playerStandings[0];
-      return reply(`השחקן המוביל בממוצע הוא ${l.player.name}, עם ממוצע ${l.avg.toFixed(2)} (${l.games} משחקים).`);
+    // "Who's leading" — ambiguous between team and personal unless the
+    // question names which (this league tracks both rankings separately,
+    // and a bare "מי מוביל?" could reasonably mean either), so the default
+    // is to answer with both rather than guess.
+    if (/^מי (מוביל|ראשון|בפסגה|בראש)|מי (ה)?שחקן(ית)?.*(הכי טוב|מוביל|הממוצע הגבוה)|מי מוביל בממוצע/.test(norm)) {
+      const wantsPlayerOnly = /שחקן|שחקנית|אישי|ממוצע/.test(norm) && !/קבוצ/.test(norm);
+      const wantsTeamOnly = /קבוצ/.test(norm) && !/שחקן|שחקנית|אישי/.test(norm);
+      const teamAnswer = teamStandings.length
+        ? `הקבוצה המובילה (דירוג קבוצתי) היא ${teamStandings[0].team.name}, עם ${teamStandings[0].points} נקודות ליגה ו-${teamStandings[0].pins} פינים.`
+        : 'עדיין אין נתוני דירוג קבוצתי.';
+      const playerAnswer = playerStandings.length
+        ? `השחקן המוביל (דירוג אישי) הוא ${playerStandings[0].player.name}, עם ממוצע ${playerStandings[0].avg.toFixed(2)} (${playerStandings[0].games} משחקים).`
+        : 'עדיין אין נתוני דירוג אישי.';
+      if (wantsTeamOnly) return reply(teamAnswer);
+      if (wantsPlayerOnly) return reply(playerAnswer);
+      return reply(`${teamAnswer}\n${playerAnswer}`);
     }
 
     // Personal average lookup: "מה הממוצע של X" / "כמה ממוצע יש ל-X"
@@ -966,15 +970,32 @@ function renderContent(DB) {
       return reply(`הממוצע של ${p.name} הוא ${st.avg.toFixed(2)}, על סמך ${st.games} משחקים (ציון גבוה: ${st.high}).`);
     }
 
-    // Team standing lookup: "כמה נקודות יש ל-X" / "מה המצב של קבוצת X" / "באיזה מקום X"
+    // Standing lookup by name: "כמה נקודות יש ל-X" / "מה המצב של X" /
+    // "באיזה מקום X" — X might be a team or a player (team names are often
+    // a captain's own name in this league, so the same word can be both),
+    // so check both and answer with whichever actually match, labeled when
+    // both do.
     m = norm.match(/(?:כמה נקודות יש ל|מה המצב של(?: קבוצת)?|באיזה מקום (?:נמצאת|נמצא))\s*(.+)/);
     if (m) {
       const t = findTeam(m[1]);
-      if (!t) return reply(`לא מצאתי קבוצה בשם "${m[1].trim()}".`);
-      const idx = teamStandings.findIndex(s => s.team.id === t.id);
-      if (idx === -1) return reply(`לקבוצת ${t.name} אין עדיין משחקים רשומים.`);
-      const s = teamStandings[idx];
-      return reply(`${t.name} נמצאת במקום ${idx + 1} מתוך ${teamStandings.length}, עם ${s.points} נקודות ו-${s.pins} פינים.`);
+      const p = findPlayer(m[1]);
+      if (!t && !p) return reply(`לא מצאתי קבוצה או שחקן בשם "${m[1].trim()}".`);
+      const parts = [];
+      if (t) {
+        const idx = teamStandings.findIndex(s => s.team.id === t.id);
+        const label = (t && p) ? 'קבוצתית — ' : '';
+        parts.push(idx === -1
+          ? `${label}לקבוצת ${t.name} אין עדיין משחקים רשומים.`
+          : `${label}${t.name} נמצאת במקום ${idx + 1} מתוך ${teamStandings.length}, עם ${teamStandings[idx].points} נקודות ו-${teamStandings[idx].pins} פינים.`);
+      }
+      if (p) {
+        const pidx = playerStandings.findIndex(s => s.player.id === p.id);
+        const label = (t && p) ? 'אישית — ' : '';
+        parts.push(pidx === -1
+          ? `${label}ל${p.name} אין עדיין משחקים רשומים.`
+          : `${label}${p.name} במקום ${pidx + 1} בדירוג האישי, עם ממוצע ${playerStandings[pidx].avg.toFixed(2)}.`);
+      }
+      return reply(parts.join('\n'));
     }
 
     // All-time single-game record
