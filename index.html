@@ -786,19 +786,25 @@ function renderContent(DB) {
   // Round all-stars: top 5 individual series totals from the most recent match date
   const leagueResults = DB.results.filter(r => !r.isPractice);
   const latestDate = leagueResults.length ? leagueResults.reduce((max, r) => (r.date > max ? r.date : max), leagueResults[0].date) : null;
-  const roundEntries = [];
-  if (latestDate) {
-    leagueResults.filter(r => r.date === latestDate).forEach(r => {
+  const allStarsFor = date => {
+    const entries = [];
+    leagueResults.filter(r => r.date === date).forEach(r => {
       const absent = r.absentPlayerIds || [];
       const pids = new Set();
       (r.games || []).forEach(g => Object.keys(g.playerScores || {}).forEach(pid => { if (!absent.includes(pid)) pids.add(pid); }));
       pids.forEach(pid => {
         const total = (r.games || []).reduce((s, g) => s + ((g.playerScores && g.playerScores[pid]) || 0), 0);
-        roundEntries.push({ pid, total });
+        entries.push({ pid, total });
       });
     });
-  }
-  const roundAllStars = roundEntries.sort((a, b) => b.total - a.total).slice(0, 5);
+    return entries.sort((a, b) => b.total - a.total).slice(0, 5);
+  };
+  const roundAllStars = latestDate ? allStarsFor(latestDate) : [];
+  // How many rounds (dates) each player has made the all-stars, this one included
+  const allStarCounts = {};
+  [...new Set(leagueResults.map(r => r.date))].forEach(d => {
+    new Set(allStarsFor(d).map(e => e.pid)).forEach(pid => { allStarCounts[pid] = (allStarCounts[pid] || 0) + 1; });
+  });
   const lastRoundResults = latestDate ? leagueResults.filter(r => r.date === latestDate) : [];
 
   // All-time single-game high scores (top 3) — absent-filled scores excluded
@@ -1072,7 +1078,7 @@ function renderContent(DB) {
       <div class="card">
         <h2>&#x2B50; נבחרת המחזור${latestDate ? ' — ' + fmtDate(latestDate) : ''}</h2>
         <div class="table-wrap"><table>
-          <thead><tr><th>#</th><th>שחקן</th><th>קבוצה</th><th>ניקוד סדרה</th></tr></thead>
+          <thead><tr><th>#</th><th>שחקן</th><th>קבוצה</th><th>ניקוד סדרה</th><th>הופעות בנבחרת</th></tr></thead>
           <tbody>
             ${roundAllStars.length ? roundAllStars.map((e, i) => `
               <tr class="${rankClass(i)}">
@@ -1080,7 +1086,8 @@ function renderContent(DB) {
                 <td>${playerName(e.pid)}</td>
                 <td>${teamCell(e.pid)}</td>
                 <td><strong>${e.total}</strong></td>
-              </tr>`).join('') : `<tr><td colspan="4" style="text-align:center;color:#94A3B8;">אין נתונים עדיין</td></tr>`}
+                <td>${allStarCounts[e.pid] || 1}</td>
+              </tr>`).join('') : `<tr><td colspan="5" style="text-align:center;color:#94A3B8;">אין נתונים עדיין</td></tr>`}
           </tbody>
         </table></div>
       </div>
