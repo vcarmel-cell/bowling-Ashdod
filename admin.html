@@ -421,6 +421,12 @@ input[type="number"].score-input { text-align: center; padding: 8px 4px; font-we
           <h2 style="margin-bottom:14px; font-size:16px;">&#x1F511; סיסמת ניהול</h2>
           <p style="font-size:13px;color:#64748B;margin-bottom:14px;">הסיסמה נדרשת לכניסה למסך הניהול הזה בלבד. האתר הציבורי פתוח תמיד ללא סיסמה.</p>
           <button class="btn btn-secondary" onclick="openChangePinModal()">שנה סיסמה</button>
+          <h2 style="margin:22px 0 10px; font-size:16px;">&#x1F3AF; סיסמת מזין תוצאות</h2>
+          <p style="font-size:13px;color:#64748B;margin-bottom:10px;">כניסה עם הסיסמה הזו מאפשרת רק להזין ולערוך תוצאות משחקים — בלי מחיקה ובלי גישה לשאר המסכים. השאר ריק כדי לבטל.</p>
+          <div style="display:flex; gap:8px;">
+            <input type="text" id="set-scorer-pin" placeholder="לא מוגדרת" style="flex:1;">
+            <button class="btn btn-secondary" onclick="saveScorerPin()">שמור</button>
+          </div>
         </div>
       </div>
       <div class="card">
@@ -1051,7 +1057,12 @@ const RENDERERS = {
   'result-entry': null
 };
 
+// 'admin' or 'scorer' — set at login. A scorer only gets the results pages.
+let currentRole = 'admin';
+const SCORER_PAGES = ['results', 'result-entry'];
+
 function showPage(p) {
+  if (currentRole === 'scorer' && !SCORER_PAGES.includes(p)) p = 'results';
   document.querySelectorAll('.page').forEach(el => el.classList.remove('active'));
   document.querySelectorAll('.nav a').forEach(el => el.classList.remove('active'));
   document.getElementById('page-' + p).classList.add('active');
@@ -2160,7 +2171,7 @@ function renderResults() {
       <td style="white-space:nowrap;">
         <button class="btn btn-secondary btn-sm" onclick="openResultDetail('${r.id}')">פרטים</button>
         <button class="btn btn-secondary btn-sm" onclick="openEditResult('${r.id}')">&#x270F;&#xFE0F; ערוך</button>
-        <button class="btn btn-danger btn-sm" onclick="deleteResult('${r.id}')">מחק</button>
+        ${currentRole === 'admin' ? `<button class="btn btn-danger btn-sm" onclick="deleteResult('${r.id}')">מחק</button>` : ''}
       </td>
     </tr>`;
   }).join('') || '<tr><td colspan="6" style="text-align:center; color:#94A3B8;">אין תוצאות עדיין</td></tr>';
@@ -3263,6 +3274,7 @@ async function forceSyncLocalToCloud() {
 function renderSettings() {
   document.getElementById('settings-project-id').textContent = FIREBASE_CONFIG ? FIREBASE_CONFIG.projectId : 'לא מחובר';
   document.getElementById('set-league-name').value = DB.settings.leagueName || '';
+  document.getElementById('set-scorer-pin').value = DB.settings.scorerPin || '';
   _pendingLogoData = undefined;
   document.getElementById('league-logo-input').value = '';
   if (DB.settings.logoData) {
@@ -3416,6 +3428,16 @@ function saveNewPin() {
   toast('✅ הסיסמה עודכנה');
 }
 
+function saveScorerPin() {
+  const pin = document.getElementById('set-scorer-pin').value.trim();
+  if (pin && pin.length < 4) { toast('❌ הסיסמה חייבת להכיל לפחות 4 תווים'); return; }
+  if (pin && pin === getPin()) { toast('❌ הסיסמה חייבת להיות שונה מסיסמת הניהול'); return; }
+  DB.settings.scorerPin = pin;
+  dbSave();
+  fbSet('settings', 'config', DB.settings);
+  toast(pin ? '✅ סיסמת מזין התוצאות נשמרה' : '✅ סיסמת מזין התוצאות בוטלה');
+}
+
 // ─── LOGIN ───────────────────────────────────────────────────
 function showLoginScreen() {
   document.getElementById('login-screen').style.display = 'flex';
@@ -3425,9 +3447,15 @@ function showLoginScreen() {
 function submitLoginPin() {
   const entered = document.getElementById('login-pin-input').value;
   const errEl = document.getElementById('login-error');
-  if (entered === getPin()) {
+  const scorerPin = DB.settings.scorerPin || '';
+  const role = entered === getPin() ? 'admin' : (scorerPin && entered === scorerPin) ? 'scorer' : null;
+  if (role) {
+    currentRole = role;
+    document.querySelectorAll('.nav a').forEach(a => {
+      a.style.display = (role === 'admin' || a.id === 'nav-results') ? '' : 'none';
+    });
     document.getElementById('login-screen').style.display = 'none';
-    showPage('dashboard');
+    showPage(role === 'admin' ? 'dashboard' : 'results');
     populateTeamSelects();
   } else {
     errEl.style.display = 'block';
