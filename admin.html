@@ -422,7 +422,7 @@ input[type="number"].score-input { text-align: center; padding: 8px 4px; font-we
           <p style="font-size:13px;color:#64748B;margin-bottom:14px;">הסיסמה נדרשת לכניסה למסך הניהול הזה בלבד. האתר הציבורי פתוח תמיד ללא סיסמה.</p>
           <button class="btn btn-secondary" onclick="openChangePinModal()">שנה סיסמה</button>
           <h2 style="margin:22px 0 10px; font-size:16px;">&#x1F3AF; סיסמת מזין תוצאות</h2>
-          <p style="font-size:13px;color:#64748B;margin-bottom:10px;">כניסה עם הסיסמה הזו מאפשרת רק להזין ולערוך תוצאות משחקים — בלי מחיקה ובלי גישה לשאר המסכים. השאר ריק כדי לבטל.</p>
+          <p style="font-size:13px;color:#64748B;margin-bottom:10px;">כניסה עם הסיסמה הזו מאפשרת רק להזין ולערוך תוצאות משחקים וניקוד אישי — בלי מחיקה ובלי גישה לשאר המסכים. השאר ריק כדי לבטל.</p>
           <div style="display:flex; gap:8px;">
             <input type="text" id="set-scorer-pin" placeholder="לא מוגדרת" style="flex:1;">
             <button class="btn btn-secondary" onclick="saveScorerPin()">שמור</button>
@@ -1059,7 +1059,7 @@ const RENDERERS = {
 
 // 'admin' or 'scorer' — set at login. A scorer only gets the results pages.
 let currentRole = 'admin';
-const SCORER_PAGES = ['results', 'result-entry'];
+const SCORER_PAGES = ['results', 'result-entry', 'practice'];
 
 function showPage(p) {
   if (currentRole === 'scorer' && !SCORER_PAGES.includes(p)) p = 'results';
@@ -2259,7 +2259,7 @@ function renderPracticePage() {
       <td style="font-size:12px;">${absentCell}</td>
       <td style="white-space:nowrap;">
         <button class="btn btn-secondary btn-sm" onclick="openEditPractice('${r.id}')">&#x270F;&#xFE0F; ערוך</button>
-        <button class="btn btn-danger btn-sm" onclick="deletePracticeEntry('${r.id}')">מחק</button>
+        ${currentRole === 'admin' ? `<button class="btn btn-danger btn-sm" onclick="deletePracticeEntry('${r.id}')">מחק</button>` : ''}
       </td>
     </tr>`;
   }).join('') || '<tr><td colspan="4" style="text-align:center; color:#94A3B8;">אין משחקי תרגול עדיין</td></tr>';
@@ -3452,7 +3452,7 @@ function submitLoginPin() {
   if (role) {
     currentRole = role;
     document.querySelectorAll('.nav a').forEach(a => {
-      a.style.display = (role === 'admin' || a.id === 'nav-results') ? '' : 'none';
+      a.style.display = (role === 'admin' || SCORER_PAGES.includes(a.id.replace('nav-', ''))) ? '' : 'none';
     });
     document.getElementById('login-screen').style.display = 'none';
     showPage(role === 'admin' ? 'dashboard' : 'results');
